@@ -31,6 +31,46 @@ export function createIngestionApp({ pool, redis }: Dependencies): Express {
   const app = express();
   app.use(express.json({ limit: '256kb' }));
 
+  app.get('/journeys', async (_req: Request, res: Response) => {
+    try {
+      const result = await pool.query<{
+        journey_id: string;
+        customer_id: string;
+        score: string | number | null;
+        factors: unknown;
+        created_at: string | Date;
+      }>(
+        `select j.id as journey_id, j.customer_id, latest.score, latest.factors,
+                j.started_at as created_at
+         from journeys j
+         left join lateral (
+           select fs.score, fs.factors
+           from friction_scores fs
+           where fs.journey_id = j.id
+           order by fs.created_at desc
+           limit 1
+         ) latest on true
+         order by latest.score desc nulls last, j.started_at desc`
+      );
+      const journeys = result.rows.map((row) => {
+        const factors = typeof row.factors === 'string'
+          ? JSON.parse(row.factors) as Record<string, unknown>
+          : row.factors as Record<string, unknown> | null;
+        return {
+          journey_id: row.journey_id,
+          customer_id: row.customer_id,
+          score: row.score === null ? null : Number(row.score),
+          reason: typeof factors?.reason === 'string' ? factors.reason : null,
+          created_at: row.created_at
+        };
+      });
+      res.json(journeys);
+    } catch (error) {
+      console.error('GET /journeys failed', error);
+      res.status(500).json({ error: 'Unable to load journeys.' });
+    }
+  });
+
   app.post('/events', async (req: Request, res: Response) => {
     const { journey_id, event_type, payload, occurred_at } = req.body ?? {};
     if (typeof journey_id !== 'string' || !journey_id || typeof event_type !== 'string' || !event_type ||

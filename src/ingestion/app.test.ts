@@ -62,3 +62,36 @@ test('POSTs failed payment retry events and returns the scored journey from stat
   assert.match(status.reason, /failed payment/);
   assert.equal(status.events.length, 4);
 });
+
+test('GET /journeys returns latest scores in descending order and includes unscored journeys', async (context) => {
+  const journeys = [
+    { journey_id: 'journey-low', customer_id: 'customer-1', score: 20, factors: { reason: 'some friction' }, created_at: '2026-01-01T10:00:00.000Z' },
+    { journey_id: 'journey-none', customer_id: 'customer-2', score: null, factors: null, created_at: '2026-01-01T11:00:00.000Z' },
+    { journey_id: 'journey-high', customer_id: 'customer-3', score: 85, factors: { reason: 'many friction signals' }, created_at: '2026-01-01T09:00:00.000Z' }
+  ];
+  const fakePool = {
+    async query(sql: string) {
+      assert.match(sql, /left join lateral/i);
+      assert.match(sql, /order by fs\.created_at desc\s+limit 1/i);
+      assert.match(sql, /order by latest\.score desc nulls last/i);
+      return { rows: [...journeys].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)), rowCount: journeys.length };
+    }
+  };
+  const fakeRedis = { async get() { return null; }, async setex() { return 'OK'; } };
+  const server = createIngestionApp({ pool: fakePool as unknown as Pick<Pool, 'query'>, redis: fakeRedis as unknown as Pick<Redis, 'get' | 'setex'> }).listen(0);
+  context.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/journeys`);
+  assert.equal(response.status, 200);
+  const result = await response.json() as Array<{ journey_id: string; customer_id: string; score: number | null; reason: string | null; created_at: string }>;
+  assert.deepEqual(result.map(({ journey_id }) => journey_id), ['journey-high', 'journey-low', 'journey-none']);
+  assert.equal(result[0].score, 85);
+  assert.equal(result[0].reason, 'many friction signals');
+  assert.equal(result[2].score, null);
+  assert.equal(result[2].reason, null);
+  assert.equal(result[2].customer_id, 'customer-2');
+  assert.ok(result[2].created_at);
+});

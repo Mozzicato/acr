@@ -5,6 +5,7 @@
   "main": "dist/simulate.js",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test dist/**/*.test.js",
     "simulate": "tsx src/simulate.ts",
     "simulate:live": "tsx src/simulate.ts --live"
   },
