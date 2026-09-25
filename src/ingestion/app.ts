@@ -1,4 +1,5 @@
 import express, { type Express, type Request, type Response } from 'express';
+import cors from 'cors';
 import type { Pool } from 'pg';
 import type Redis from 'ioredis';
 import { scoreFriction, type FrictionScore, type JourneyEvent } from '../detection/scoreFriction';
@@ -29,6 +30,7 @@ async function loadEvents(pool: Dependencies['pool'], journeyId: string): Promis
 
 export function createIngestionApp({ pool, redis }: Dependencies): Express {
   const app = express();
+  app.use(cors());
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/journeys', async (_req: Request, res: Response) => {
