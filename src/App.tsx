@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Clock, Play, RotateCcw, Zap } from 'lucide-react';
-import { AcrEngine, type EngineState } from './engine/agent';
+import { Bot, Clock, Clapperboard, Play, RotateCcw, Zap } from 'lucide-react';
+import { AcrEngine, FAILURES, type EngineState } from './engine/agent';
 import { computeMetrics } from './engine/metrics';
 import { AUTONOMY_LEVELS } from './engine/policy';
-import { DEMO_JOURNEY_ID, type Scenario } from './engine/seed';
-import type { AutonomyLevel } from './engine/types';
+import { DEMO_JOURNEY_ID, ORDER_SYNC_JOURNEY_ID, type Scenario } from './engine/seed';
+import type { AutonomyLevel, FailureKind } from './engine/types';
 import { getAdvisorStatus, requestAdvice, type AdvisorStatus } from './advisorClient';
 import { formatDateTime, formatTimeSeconds } from './format';
 import { Kpis } from './components/Kpis';
@@ -19,12 +19,17 @@ const STEP_MS = reducedMotion ? 120 : 520;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const SCENARIOS: Record<Scenario, string> = {
-  alternate_available: 'Alternate courier available',
-  network_saturated: 'Courier network saturated',
+  recoverable: 'Recoverable: a safe fix exists',
+  constrained: 'Constrained: no safe fix',
 };
 
+const DEMO_SEQUENCE: Array<[string, FailureKind]> = [
+  [DEMO_JOURNEY_ID, 'courier_rejected'],
+  [ORDER_SYNC_JOURNEY_ID, 'order_not_created'],
+];
+
 export default function App() {
-  const [scenario, setScenario] = useState<Scenario>('alternate_available');
+  const [scenario, setScenario] = useState<Scenario>('recoverable');
   const [level, setLevel] = useState<AutonomyLevel>(2);
   const [useAi, setUseAi] = useState(true);
   const [advisor, setAdvisor] = useState<AdvisorStatus | null>(null);
@@ -39,6 +44,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [selectedId, setSelectedId] = useState(DEMO_JOURNEY_ID);
   const [error, setError] = useState<string | null>(null);
+  const [demoRunning, setDemoRunning] = useState(false);
 
   useEffect(() => { void getAdvisorStatus().then(setAdvisor); }, []);
 
@@ -76,13 +82,13 @@ export default function App() {
     await reveal(run);
   }, [reveal]);
 
-  const trigger = useCallback(async () => {
+  const trigger = useCallback(async (journeyId: string, kind: FailureKind) => {
     const run = runRef.current;
     const engine = engineRef.current;
     setBusy(true);
     setError(null);
     try {
-      const incident = engine.triggerCourierRejection(selectedId);
+      const incident = engine.trigger(journeyId, kind);
       if (!(await reveal(run)) || !incident) return;
 
       setThinking('Investigating through read-only tools…');
@@ -117,7 +123,26 @@ export default function App() {
         setBusy(false);
       }
     }
-  }, [advisor, execute, reveal, selectedId, useAi]);
+  }, [advisor, execute, reveal, useAi]);
+
+  /** Resets, then runs each failure type in turn, for a hands-off walkthrough. */
+  const playDemo = useCallback(async () => {
+    reset();
+    const run = runRef.current;
+    setDemoRunning(true);
+    try {
+      for (const [journeyId, kind] of DEMO_SEQUENCE) {
+        setSelectedId(journeyId);
+        await sleep(STEP_MS * 2);
+        if (runRef.current !== run) return;
+        await trigger(journeyId, kind);
+        if (runRef.current !== run) return;
+        await sleep(STEP_MS * 5);
+      }
+    } finally {
+      setDemoRunning(false);
+    }
+  }, [reset, trigger]);
 
   const decide = useCallback(async (incidentId: string, approve: boolean) => {
     const run = runRef.current;
@@ -148,7 +173,8 @@ export default function App() {
   const incidents = state.incidents.filter((i) => i.journeyId === journey.id);
   const incident = incidents.at(-1);
   const visibleTrace = trace.slice(0, revealed).filter((s) => s.journeyId === journey.id);
-  const canTrigger = !busy && engineRef.current.canTrigger(journey.id);
+  const triggers = busy || demoRunning ? [] : engineRef.current.availableTriggers(journey.id);
+  const locked = busy || demoRunning;
   const aiActive = useAi && !!advisor?.configured;
 
   return (
@@ -168,22 +194,22 @@ export default function App() {
         <div className="controls">
           <div role="radiogroup" aria-label="Autonomy level" className="segmented">
             {([0, 1, 2] as AutonomyLevel[]).map((l) => (
-              <button key={l} type="button" role="radio" aria-checked={level === l} title={AUTONOMY_LEVELS[l].summary} onClick={() => changeLevel(l)} disabled={busy}>
+              <button key={l} type="button" role="radio" aria-checked={level === l} title={AUTONOMY_LEVELS[l].summary} onClick={() => changeLevel(l)} disabled={locked}>
                 L{l} {AUTONOMY_LEVELS[l].name}
               </button>
             ))}
           </div>
           <label>
             <span className="sr-only">Scenario</span>
-            <select value={scenario} disabled={busy} onChange={(e) => { const s = e.target.value as Scenario; setScenario(s); reset(s); }}>
+            <select value={scenario} disabled={locked} onChange={(e) => { const s = e.target.value as Scenario; setScenario(s); reset(s); }}>
               {Object.entries(SCENARIOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </label>
           <div role="radiogroup" aria-label="Planner" className="segmented" title={advisor?.configured ? `LLM planner: ${advisor.model} via Groq` : 'GROQ_API_KEY is not configured on the server'}>
-            <button type="button" role="radio" aria-checked={aiActive} onClick={() => setUseAi(true)} disabled={busy || !advisor?.configured}>
+            <button type="button" role="radio" aria-checked={aiActive} onClick={() => setUseAi(true)} disabled={locked || !advisor?.configured}>
               <Bot size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> LLM
             </button>
-            <button type="button" role="radio" aria-checked={!aiActive} onClick={() => setUseAi(false)} disabled={busy}>Rules</button>
+            <button type="button" role="radio" aria-checked={!aiActive} onClick={() => setUseAi(false)} disabled={locked}>Rules</button>
           </div>
           <button type="button" className="btn btn-sm" onClick={() => reset()}><RotateCcw size={14} aria-hidden="true" />Reset</button>
         </div>
@@ -191,17 +217,23 @@ export default function App() {
 
       <section className="mission" aria-label="Demo control">
         <div className="mission-copy">
-          <h2>{journey.orderId} · {journey.events[0]?.summary.replace('Ordered ', '')}</h2>
+          <h2>{journey.orderId} · {journey.title}</h2>
           <p>
-            Promised by {formatDateTime(journey.deadline)}. {AUTONOMY_LEVELS[level].summary}{' '}
+            {journey.objective} (deadline {formatDateTime(journey.deadline)}). {AUTONOMY_LEVELS[level].summary}{' '}
             {aiActive ? `The planner reasons with ${advisor!.model}, and policy has the final say.` : 'The planner uses deterministic rules.'}
           </p>
         </div>
         <div className="mission-actions">
           {thinking && <span className="status-line"><span className="pulse" aria-hidden="true" />{thinking}</span>}
           {error && <span className="status-line" role="alert" style={{ color: 'var(--danger)' }}>{error}</span>}
-          <button type="button" className="btn btn-primary" onClick={() => void trigger()} disabled={!canTrigger}>
-            <Play size={16} aria-hidden="true" />Simulate courier_rejected_route
+          {triggers.map((kind) => (
+            <button key={kind} type="button" className="btn btn-primary" onClick={() => void trigger(journey.id, kind)} title={FAILURES[kind].label}>
+              <Play size={16} aria-hidden="true" />Simulate {FAILURES[kind].trigger}
+            </button>
+          ))}
+          {!locked && triggers.length === 0 && <span className="status-line">No failure to simulate on this journey right now.</span>}
+          <button type="button" className="btn" onClick={() => void playDemo()} disabled={locked}>
+            <Clapperboard size={16} aria-hidden="true" />Play full demo
           </button>
         </div>
       </section>

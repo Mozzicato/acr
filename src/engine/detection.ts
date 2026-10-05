@@ -51,3 +51,30 @@ export function assessDeliveryRisk(
   const severity: Severity = hoursLeft <= DETECTION_RULE.criticalWithinHours || risk >= 95 ? 'critical' : 'high';
   return { rule: DETECTION_RULE.id, ruleDescription: DETECTION_RULE.description, severity, risk, signals };
 }
+
+export const ORDER_SYNC_RULE = {
+  id: 'DR-ORDER-01',
+  description: 'Payment captured + no order created within 10 minutes',
+  overdueMinutes: 10,
+};
+
+/** Fires when a customer has been charged but the order system has no order for the payment. */
+export function assessOrderSyncRisk(
+  customer: Customer,
+  paymentAt: string,
+  now: string,
+  orderExists: boolean,
+): RiskAssessment | null {
+  const minutes = hoursBetween(paymentAt, now) * 60;
+  if (orderExists || minutes < ORDER_SYNC_RULE.overdueMinutes) return null;
+
+  const signals = ['Payment captured', `No order created after ${Math.round(minutes)} min`, 'No order confirmation sent to the customer'];
+  let risk = 86;
+  if (customer.history.supportContacts > 0) {
+    risk += 6;
+    signals.push(`${customer.history.supportContacts} earlier contact about a missing order confirmation`);
+  }
+  if (customer.tier === 'priority') risk += 5;
+  risk = Math.min(99, risk);
+  return { rule: ORDER_SYNC_RULE.id, ruleDescription: ORDER_SYNC_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
+}

@@ -7,9 +7,11 @@ export const ADVISOR_MODEL = 'openai/gpt-oss-120b';
 
 export interface AgentBriefing {
   incidentId: string;
+  failureType: string;
+  situation: string;
+  promise: string;
   orderId: string;
   item: string;
-  promisedBy: string;
   customer: { name: string; tier: string; previousDelays: number };
   signals: string[];
   evidence: string[];
@@ -39,7 +41,7 @@ export const ADVICE_SCHEMA = {
   required: ['diagnosis', 'selectedAction', 'rationale', 'confidence'],
   properties: {
     diagnosis: { type: 'string', description: 'One or two sentences: what went wrong and why, grounded only in the evidence.' },
-    selectedAction: { type: 'string', enum: ['reassign_courier', 'delay_with_credit', 'refund', 'human_review'] },
+    selectedAction: { type: 'string', enum: ['reassign_courier', 'recreate_order', 'delay_with_credit', 'refund', 'human_review'] },
     rationale: { type: 'string', description: 'One or two sentences on why this option best recovers the customer.' },
     confidence: { type: 'number', description: 'Confidence in the diagnosis, 0 to 1.' },
   },
@@ -50,7 +52,7 @@ A deterministic detector has flagged a customer journey at risk, and read-only t
 Your job:
 1. Diagnose the root cause using ONLY the evidence provided. Do not invent facts.
 2. Choose exactly one recovery option. You MUST choose an option marked permitted=true; options with permitted=false are blocked by policy and will be rejected.
-3. Prefer the option that keeps the customer's promised delivery with the lowest cost and customer impact.
+3. Prefer the option that keeps the promise made to the customer with the lowest cost and customer impact.
 Be concise and concrete. Name couriers, times and amounts from the evidence.`;
 
 export function buildAdvisorMessages(briefing: AgentBriefing): Array<{ role: 'system' | 'user'; content: string }> {

@@ -6,7 +6,8 @@ import { HealthBadge, Panel, StatusBadge } from './ui';
 const DOT: Record<string, string> = {
   payment_confirmed: 'ok', order_accepted: 'ok', courier_assigned: 'ok', parcel_collected: 'ok',
   courier_rejected_route: 'fail', incident_opened: 'warn',
-  courier_reassigned: 'agent', customer_notified: 'agent', escalated_to_human: 'warn',
+  payment_captured: 'ok', order_creation_overdue: 'fail',
+  courier_reassigned: 'agent', order_recreated: 'agent', customer_notified: 'agent', escalated_to_human: 'warn',
 };
 
 export function JourneyPanel({ journey }: { journey: Journey }) {

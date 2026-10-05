@@ -2,7 +2,7 @@
 // every call goes through here and produces an audit entry.
 
 import type { BusinessSystems, SimClock } from './systems';
-import type { Actor, AuditEntry, Notification, PolicyDecision } from './types';
+import type { ActionId, Actor, AuditEntry, Notification, PolicyDecision } from './types';
 
 export const READ_TOOLS = [
   'get_customer',
@@ -12,8 +12,17 @@ export const READ_TOOLS = [
   'get_delivery_status',
   'find_couriers',
   'search_support_history',
+  'get_checkout',
+  'get_webhook_log',
+  'check_stock',
 ] as const;
-export const WRITE_TOOLS = ['reassign_delivery', 'send_notification'] as const;
+export const WRITE_TOOLS = ['reassign_delivery', 'replay_order_creation', 'send_notification'] as const;
+
+/** The recovery action each write tool carries out. send_notification follows any executed recovery. */
+const TOOL_ACTION: Record<Exclude<WriteTool, 'send_notification'>, ActionId> = {
+  reassign_delivery: 'reassign_courier',
+  replay_order_creation: 'recreate_order',
+};
 
 export type ReadTool = (typeof READ_TOOLS)[number];
 export type WriteTool = (typeof WRITE_TOOLS)[number];
@@ -43,9 +52,15 @@ export class ToolLayer {
     return this.record(incidentId, tool, 'acr-agent', input, () => {
       switch (tool) {
         case 'get_customer': return { ...s.getCustomer(input.customerId) };
-        case 'get_order': return { ...s.getOrder(input.orderId) };
+        case 'get_order': {
+          const order = s.findOrder(input.orderId);
+          return order ? { ...order } : null;
+        }
         case 'get_payment': return { ...s.getPayment(input.orderId) };
         case 'get_inventory': return { ...s.getInventory(input.orderId) };
+        case 'get_checkout': return { ...s.getCheckout(input.orderId) };
+        case 'get_webhook_log': return s.webhooks.filter((w) => w.orderId === input.orderId).map((w) => ({ ...w }));
+        case 'check_stock': return { sku: input.sku, onHand: s.stock.get(input.sku) ?? 0 };
         case 'get_delivery_status': {
           const order = s.getOrder(input.orderId);
           const courier = order.courierId ? s.getCourier(order.courierId) : null;
@@ -65,6 +80,8 @@ export class ToolLayer {
       switch (tool) {
         case 'reassign_delivery':
           return s.assignCourier(input.orderId, input.courierId, this.clock.now());
+        case 'replay_order_creation':
+          return s.createOrderFromCheckout(input.orderId, this.clock.now());
         case 'send_notification': {
           const customer = s.getCustomer(input.customerId);
           const channel = customer.preferences.channel;
@@ -89,7 +106,9 @@ export class ToolLayer {
     const { decision, approvedBy } = auth;
     const verdict = decision.selectedVerdict;
     if (decision.incidentId !== incidentId) throw new PermissionDenied('Authorization belongs to another incident.');
-    if (!verdict.allowed || decision.selected.action !== 'reassign_courier') {
+    const action = decision.selected.action;
+    const covered = tool === 'send_notification' ? action !== 'human_review' : TOOL_ACTION[tool] === action;
+    if (!verdict.allowed || !covered) {
       throw new PermissionDenied(`Policy ${verdict.policy} does not authorize ${tool}.`);
     }
     if (!verdict.autonomous && approvedBy !== 'operator') {
@@ -97,6 +116,9 @@ export class ToolLayer {
     }
     if (tool === 'reassign_delivery' && input.courierId !== decision.selected.courierId) {
       throw new PermissionDenied('Courier differs from the one the policy authorized.');
+    }
+    if (tool === 'replay_order_creation' && input.orderId !== decision.selected.orderId) {
+      throw new PermissionDenied('Order differs from the one the policy authorized.');
     }
   }
 

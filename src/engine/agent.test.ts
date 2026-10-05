@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AcrEngine } from './agent';
 import { computeMetrics } from './metrics';
-import { DEMO_JOURNEY_ID } from './seed';
+import { DEMO_JOURNEY_ID, ORDER_SYNC_JOURNEY_ID } from './seed';
 
 function runDemo(engine: AcrEngine) {
   const incident = engine.triggerCourierRejection(DEMO_JOURNEY_ID)!;
@@ -31,13 +31,13 @@ describe('MVP acceptance criteria (PRD §10)', () => {
   });
 
   it('4: policy authorizes reassignment only when an eligible alternate courier exists', () => {
-    const ok = new AcrEngine('alternate_available');
+    const ok = new AcrEngine('recoverable');
     const okId = runDemo(ok);
     const okDecision = ok.snapshot().decisions[okId];
     expect(okDecision.selected.action).toBe('reassign_courier');
     expect(okDecision.selected.courierId).toBe('CR-LAGOON');
 
-    const saturated = new AcrEngine('network_saturated');
+    const saturated = new AcrEngine('constrained');
     const id = runDemo(saturated);
     const state = saturated.snapshot();
     expect(state.decisions[id].selected.action).toBe('human_review');
@@ -48,7 +48,7 @@ describe('MVP acceptance criteria (PRD §10)', () => {
   });
 
   it('5–6: Level 2 reassigns, verifies, notifies, records the outcome, and opens no ticket', () => {
-    const engine = new AcrEngine('alternate_available', 2);
+    const engine = new AcrEngine('recoverable', 2);
     const id = runDemo(engine);
     engine.execute(id);
     const state = engine.snapshot();
@@ -74,7 +74,7 @@ describe('MVP acceptance criteria (PRD §10)', () => {
 
 describe('autonomy levels and permissions', () => {
   it('Level 0 observes only', () => {
-    const engine = new AcrEngine('alternate_available', 0);
+    const engine = new AcrEngine('recoverable', 0);
     const id = runDemo(engine);
     const state = engine.snapshot();
     expect(state.incidents[0].status).toBe('observing');
@@ -83,7 +83,7 @@ describe('autonomy levels and permissions', () => {
   });
 
   it('Level 1 waits for an operator, then executes as the operator', () => {
-    const engine = new AcrEngine('alternate_available', 1);
+    const engine = new AcrEngine('recoverable', 1);
     const id = runDemo(engine);
     expect(engine.snapshot().incidents[0].status).toBe('awaiting_approval');
     expect(() => engine.execute(id)).toThrow(/not ready/);
@@ -94,7 +94,7 @@ describe('autonomy levels and permissions', () => {
   });
 
   it('Level 1 rejection escalates without acting', () => {
-    const engine = new AcrEngine('alternate_available', 1);
+    const engine = new AcrEngine('recoverable', 1);
     const id = runDemo(engine);
     engine.reject(id);
     const state = engine.snapshot();
@@ -104,15 +104,16 @@ describe('autonomy levels and permissions', () => {
 
   it('only journeys with an active courier assignment can be triggered', () => {
     const engine = new AcrEngine();
-    expect(engine.canTrigger('JRN-1287')).toBe(false); // already in transit
+    expect(engine.availableTriggers('JRN-1287')).toEqual([]); // already in transit
+    expect(engine.availableTriggers(DEMO_JOURNEY_ID)).toEqual(['courier_rejected']);
     engine.triggerCourierRejection(DEMO_JOURNEY_ID);
-    expect(engine.canTrigger(DEMO_JOURNEY_ID)).toBe(false); // incident open
+    expect(engine.availableTriggers(DEMO_JOURNEY_ID)).toEqual([]); // incident open
   });
 });
 
 describe('LLM advice is bounded by policy', () => {
   it('uses the advised option when policy permits it', () => {
-    const engine = new AcrEngine('alternate_available', 2);
+    const engine = new AcrEngine('recoverable', 2);
     const incident = engine.triggerCourierRejection(DEMO_JOURNEY_ID)!;
     const briefing = engine.investigate(incident.id);
     expect(briefing.options.find((o) => o.action === 'reassign_courier')!.permitted).toBe(true);
@@ -123,12 +124,54 @@ describe('LLM advice is bounded by policy', () => {
   });
 
   it('overrides an advised option that policy blocks', () => {
-    const engine = new AcrEngine('alternate_available', 2);
+    const engine = new AcrEngine('recoverable', 2);
     const incident = engine.triggerCourierRejection(DEMO_JOURNEY_ID)!;
     engine.investigate(incident.id);
     engine.conclude(incident.id, { diagnosis: 'x', selectedAction: 'refund', rationale: 'Refund them.', confidence: 0.9 });
     const state = engine.snapshot();
     expect(state.decisions[incident.id].selected.action).toBe('reassign_courier');
     expect(state.trace.some((t) => t.title === 'Policy overrode the agent')).toBe(true);
+  });
+});
+
+describe('order sync playbook: payment captured, order webhook dropped', () => {
+  function runOrderSync(scenario: 'recoverable' | 'constrained', level: 0 | 1 | 2 = 2) {
+    const engine = new AcrEngine(scenario, level);
+    expect(engine.availableTriggers(ORDER_SYNC_JOURNEY_ID)).toEqual(['order_not_created']);
+    const incident = engine.trigger(ORDER_SYNC_JOURNEY_ID, 'order_not_created')!;
+    engine.investigate(incident.id);
+    engine.conclude(incident.id, null);
+    return { engine, id: incident.id };
+  }
+
+  it('detects a charged customer with no order and diagnoses the dropped webhook', () => {
+    const { engine } = runOrderSync('recoverable', 1);
+    const incident = engine.snapshot().incidents[0];
+    expect(incident).toMatchObject({ kind: 'order_not_created', rule: 'DR-ORDER-01', risk: 92 });
+    expect(incident.cause).toMatch(/webhook/);
+    const tools = engine.snapshot().audit.map((a) => a.tool);
+    expect(tools).toEqual(expect.arrayContaining(['get_payment', 'get_order', 'get_checkout', 'get_webhook_log', 'check_stock']));
+  });
+
+  it('recreates the order once, verifies it, and notifies by email', () => {
+    const { engine, id } = runOrderSync('recoverable');
+    engine.execute(id);
+    const state = engine.snapshot();
+    expect(state.decisions[id].selected).toMatchObject({ action: 'recreate_order', orderId: 'ORD-1297' });
+    expect(state.incidents[0].status).toBe('resolved');
+    expect(state.journeys.find((j) => j.id === ORDER_SYNC_JOURNEY_ID)).toMatchObject({ health: 'recovered', currentState: 'order_confirmed' });
+    expect(state.trace.map((t) => t.title)).toEqual(expect.arrayContaining(['Order confirmed in order system', 'Stock reserved']));
+    expect(state.notifications[0]).toMatchObject({ channel: 'email', to: 'bola@example.com' });
+    expect(state.notifications[0].body).toContain("don't need to pay again");
+    expect(state.recoveries[0]).toMatchObject({ failure: 'Dropped order webhook', outcome: 'successful' });
+  });
+
+  it('escalates when the item is out of stock instead of refunding', () => {
+    const { engine, id } = runOrderSync('constrained');
+    const state = engine.snapshot();
+    expect(state.decisions[id].verdicts.find((v) => v.action === 'recreate_order')).toMatchObject({ allowed: false });
+    expect(state.decisions[id].verdicts.find((v) => v.action === 'refund')).toMatchObject({ allowed: false });
+    expect(state.decisions[id].selected.action).toBe('human_review');
+    expect(state.audit.some((a) => a.tool === 'replay_order_creation')).toBe(false);
   });
 });

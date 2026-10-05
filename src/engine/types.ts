@@ -68,6 +68,8 @@ export interface JourneyEvent {
 
 export interface Journey {
   id: string;
+  /** What the customer bought, for display. */
+  title: string;
   customerId: string;
   orderId: string;
   objective: string;
@@ -94,6 +96,7 @@ export type IncidentStatus =
 export interface Incident {
   id: string;
   journeyId: string;
+  kind: FailureKind;
   severity: Severity;
   /** Probability (0–100) that the journey fails without intervention. */
   risk: number;
@@ -111,7 +114,9 @@ export interface Incident {
   resolvedAt: string | null;
 }
 
-export type ActionId = 'reassign_courier' | 'delay_with_credit' | 'refund' | 'human_review';
+export type FailureKind = 'courier_rejected' | 'order_not_created';
+
+export type ActionId = 'reassign_courier' | 'recreate_order' | 'delay_with_credit' | 'refund' | 'human_review';
 
 export interface RecoveryOption {
   action: ActionId;
@@ -121,6 +126,8 @@ export interface RecoveryOption {
   customerImpact: 'low' | 'medium' | 'high';
   /** Alternate courier for a reassignment. */
   courierId?: string;
+  /** Order to recreate from its captured payment. */
+  orderId?: string;
   projectedEta?: string;
 }
 

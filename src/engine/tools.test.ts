@@ -6,7 +6,7 @@ import { PermissionDenied, ToolLayer } from './tools';
 import type { AuditEntry, RecoveryOption } from './types';
 
 function setup(level: 0 | 1 | 2 = 2) {
-  const { systems } = seed('alternate_available');
+  const { systems } = seed('recoverable');
   systems.rejectRoute('ORD-1292');
   const audit: AuditEntry[] = [];
   const tools = new ToolLayer(systems, new SimClock('2026-10-04T13:00:00+01:00'), audit);
@@ -15,6 +15,7 @@ function setup(level: 0 | 1 | 2 = 2) {
     courierId: 'CR-LAGOON', projectedEta: '2026-10-04T16:45:00+01:00',
   };
   const decision = decide('INC-0001', [option], {
+    kind: 'courier_rejected',
     order: systems.getOrder('ORD-1292'), paymentConfirmed: true, inventoryReserved: true,
     originalCourierUnavailable: true, candidate: systems.getCourier('CR-LAGOON'),
   }, level);
@@ -47,12 +48,26 @@ describe('tool permission layer', () => {
     expect(tools.write('INC-0001', 'reassign_delivery', input, { decision, approvedBy: 'operator' })).toMatchObject({ accepted: true });
   });
 
+  it('order replay is idempotent and never duplicates an order', () => {
+    const { systems } = setup();
+    systems.capturePayment('ORD-1297', '2026-10-04T13:00:00+01:00', true);
+    expect(systems.createOrderFromCheckout('ORD-1297', '2026-10-04T13:11:00+01:00')).toEqual({ created: true });
+    expect(systems.createOrderFromCheckout('ORD-1297', '2026-10-04T13:12:00+01:00')).toMatchObject({ created: false, reason: 'order already exists' });
+    expect(systems.stock.get('AUD-NC9')).toBe(2);
+  });
+
+  it('a delivery authorization cannot be used to replay an order', () => {
+    const { tools, decision } = setup();
+    expect(() => tools.write('INC-0001', 'replay_order_creation', { orderId: 'ORD-1297' }, { decision, approvedBy: 'policy-engine' }))
+      .toThrow(/does not authorize/);
+  });
+
   it('policy blocks financial actions outright', () => {
     const { systems } = setup();
     const decision = decide('INC-0001', [
       { action: 'refund', label: 'Refund', successProbability: 100, costNgn: 845_000, customerImpact: 'high' },
       { action: 'human_review', label: 'Escalate', successProbability: 85, costNgn: 0, customerImpact: 'medium' },
-    ], { order: systems.getOrder('ORD-1292'), paymentConfirmed: true, inventoryReserved: true, originalCourierUnavailable: true, candidate: null }, 2);
+    ], { kind: 'courier_rejected', order: systems.getOrder('ORD-1292'), paymentConfirmed: true, inventoryReserved: true, originalCourierUnavailable: true, candidate: null }, 2);
     expect(decision.verdicts[0]).toMatchObject({ policy: 'FINANCIAL-HOLD-01', allowed: false });
     expect(decision.selected.action).toBe('human_review');
   });

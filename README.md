@@ -23,10 +23,14 @@ Without a `GROQ_API_KEY`, the app still runs end to end with the deterministic p
 4. The LLM (Groq `openai/gpt-oss-120b`) diagnoses the problem and picks a recovery. The **policy engine** checks the facts again on its own and has the final say.
 5. ACR reassigns the order to Lagoon Express. It then **verifies** that the courier accepted and that the ETA is still within the promise, notifies the customer by SMS, and records the outcome. No support ticket is created.
 
+**Second failure type:** select **ORD-1297** (headphones) and click **Simulate order_webhook_dropped**. The customer is charged, but the order webhook fails. Ten minutes later the watchdog rule `DR-ORDER-01` fires. ACR traces the cause to the failed `order.create` webhook and checks the amounts and stock. It then replays order creation from the paid checkout (the replay can't create a duplicate), verifies the result and emails the customer.
+
+**Play full demo** resets the dashboard and runs both recoveries back to back, with no clicking needed.
+
 Try the other paths:
 - **L1 Recommend**: ACR waits for an operator to approve or reject.
 - **L0 Observe**: ACR detects and recommends, but takes no action.
-- **Courier network saturated**: policy blocks reassignment, so the incident is escalated to a human.
+- **Constrained scenario**: couriers are saturated and the headphones are out of stock. Policy blocks both automated fixes, and refunds are always blocked, so both incidents go to a human.
 
 ## How it's built
 
@@ -34,14 +38,16 @@ Try the other paths:
 src/engine/          pure TypeScript, no UI, fully tested
   systems.ts         mocked Order / Payment / Inventory / Logistics / CRM / Notification APIs
   seed.ts            demo journeys, customers and courier pool
-  detection.ts       deterministic delivery-risk rule (no ML claims)
+  detection.ts       deterministic risk rules: DR-DELIVERY-01, DR-ORDER-01 (no ML claims)
   tools.ts           tool layer + permission layer; every call is audited
   policy.ts          recovery policy engine: final authority, autonomy levels
   advisor.ts         LLM contract: briefing in, validated advice out
-  agent.ts           detect → investigate → plan → decide → act → verify → notify → learn
+  agent.ts           the shared loop: detect → investigate → plan → decide → act → verify → notify → learn
+  playbooks/         per-failure investigation, options, execution and verification
+                     (delivery.ts: courier rejected · orderSync.ts: order webhook dropped)
   metrics.ts         ARR, HER, MTTR, customer effort (PRD §20)
 server/agentProxy.ts Vite middleware that calls Groq server-side; the key never reaches the browser
 src/components/      dashboard panels
 ```
 
-**Safety model:** LLM → tool layer → permission layer → business API. The LLM can only pick from options the agent proposed. Write tools (`reassign_delivery`, `send_notification`) need a policy decision for that incident. Below Level 2 they also need operator approval. Financial actions are always blocked in the MVP.
+**Safety model:** LLM → tool layer → permission layer → business API. The LLM can only pick from options the agent proposed. Write tools (`reassign_delivery`, `replay_order_creation`, `send_notification`) need a policy decision for that incident. Below Level 2 they also need operator approval. Financial actions are always blocked in the MVP.

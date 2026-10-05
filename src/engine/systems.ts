@@ -23,6 +23,28 @@ export class SimClock {
 export const addMinutes = (iso: string, minutes: number): string =>
   new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 
+/** A cart at checkout: everything needed to create its order. */
+export interface Checkout {
+  orderId: string;
+  customerId: string;
+  item: string;
+  sku: string;
+  amount: number;
+  zone: Zone;
+  transitMinutes: number;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event: 'order.create';
+  orderId: string;
+  paymentReference: string;
+  status: 'delivered' | 'failed';
+  attempts: number;
+  lastError: string | null;
+  at: string;
+}
+
 export interface SupportContact {
   customerId: string;
   at: string;
@@ -36,6 +58,10 @@ export class BusinessSystems {
   readonly inventory = new Map<string, InventoryRecord>();
   readonly couriers = new Map<string, Courier>();
   readonly supportHistory: SupportContact[] = [];
+  readonly checkouts = new Map<string, Checkout>();
+  readonly webhooks: WebhookDelivery[] = [];
+  /** Units on hand per SKU. */
+  readonly stock = new Map<string, number>();
   readonly outbox: Notification[] = [];
   /** Support tickets opened for customers. ACR's goal is to keep this empty. */
   readonly tickets: string[] = [];
@@ -43,6 +69,59 @@ export class BusinessSystems {
   // Order API
   getOrder(id: string): Order {
     return required(this.orders.get(id), `order ${id}`);
+  }
+
+  findOrder(id: string): Order | null {
+    return this.orders.get(id) ?? null;
+  }
+
+  getCheckout(orderId: string): Checkout {
+    return required(this.checkouts.get(orderId), `checkout ${orderId}`);
+  }
+
+  /** The customer pays at checkout. If the webhook drops, the order service never hears about it. */
+  capturePayment(orderId: string, now: string, webhookFails: boolean): Payment {
+    const checkout = this.getCheckout(orderId);
+    const payment: Payment = { orderId, status: 'confirmed', amount: checkout.amount, reference: `PAY-${orderId.slice(4)}` };
+    this.payments.set(orderId, payment);
+    this.webhooks.push({
+      id: `WH-${String(this.webhooks.length + 1).padStart(4, '0')}`,
+      event: 'order.create',
+      orderId,
+      paymentReference: payment.reference,
+      status: webhookFails ? 'failed' : 'delivered',
+      attempts: webhookFails ? 3 : 1,
+      lastError: webhookFails ? 'HTTP 504 from order-service after 3 retries' : null,
+      at: now,
+    });
+    if (!webhookFails) this.createOrderFromCheckout(orderId, now);
+    return payment;
+  }
+
+  /** Creates the order for a paid checkout. Idempotent: an existing order is never duplicated. */
+  createOrderFromCheckout(orderId: string, now: string): { created: boolean; reason?: string } {
+    if (this.orders.has(orderId)) return { created: false, reason: 'order already exists' };
+    const checkout = this.getCheckout(orderId);
+    if (this.payments.get(orderId)?.status !== 'confirmed') return { created: false, reason: 'payment not captured' };
+    const onHand = this.stock.get(checkout.sku) ?? 0;
+    if (onHand < 1) return { created: false, reason: 'out of stock' };
+    this.stock.set(checkout.sku, onHand - 1);
+    this.inventory.set(orderId, { sku: checkout.sku, orderId, reserved: true, warehouse: 'WH-Lagos-01' });
+    this.orders.set(orderId, {
+      id: orderId,
+      customerId: checkout.customerId,
+      item: checkout.item,
+      sku: checkout.sku,
+      amount: checkout.amount,
+      zone: checkout.zone,
+      status: 'accepted',
+      courierId: null,
+      promisedBy: addMinutes(now, 30 * 60),
+      eta: addMinutes(now, 26 * 60),
+      transitMinutes: checkout.transitMinutes,
+    });
+    for (const w of this.webhooks.filter((w) => w.orderId === orderId)) w.status = 'delivered';
+    return { created: true };
   }
 
   // Payment API

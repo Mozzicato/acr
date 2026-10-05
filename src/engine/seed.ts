@@ -1,12 +1,15 @@
-// Demo scenario (PRD §10): a laptop order in Lekki whose courier rejects the route at 13:00.
+// Demo scenarios. PRD §10: a laptop order in Lekki whose courier rejects the route at 13:00.
+// Second failure type: a headphones checkout whose payment is captured but whose order is never created.
 
 import { BusinessSystems } from './systems';
 import type { Courier, Journey, JourneyEvent, Zone } from './types';
 
 export const DEMO_JOURNEY_ID = 'JRN-1292';
+export const ORDER_SYNC_JOURNEY_ID = 'JRN-1297';
 export const DEMO_START = '2026-10-04T12:59:00+01:00';
 
-export type Scenario = 'alternate_available' | 'network_saturated';
+/** Recoverable: a safe automated fix exists. Constrained: none does, so ACR must escalate. */
+export type Scenario = 'recoverable' | 'constrained';
 
 interface OrderSeed {
   orderId: string;
@@ -63,7 +66,7 @@ function order(
 
 function couriers(scenario: Scenario): Courier[] {
   // A saturated network leaves no Lekki courier with room for another route.
-  const saturated = scenario === 'network_saturated';
+  const saturated = scenario === 'constrained';
   return [
     { id: 'CR-SWIFT', name: 'Swift Dispatch', zone: 'Lekki', capacity: 0.97, available: true, pickupMinutes: 40 },
     { id: 'CR-LAGOON', name: 'Lagoon Express', zone: 'Lekki', capacity: saturated ? 0.98 : 0.62, available: !saturated, pickupMinutes: 45 },
@@ -80,6 +83,7 @@ const plus = (iso: string, minutes: number) => new Date(Date.parse(iso) + minute
 export function seed(scenario: Scenario): { systems: BusinessSystems; journeys: Journey[] } {
   const systems = new BusinessSystems();
   for (const c of couriers(scenario)) systems.couriers.set(c.id, c);
+  for (const o of ORDERS) systems.stock.set(o.sku, 5);
 
   const journeys = ORDERS.map((o, index): Journey => {
     const slug = o.customer.name.split(' ')[0].toLowerCase();
@@ -132,6 +136,7 @@ export function seed(scenario: Scenario): { systems: BusinessSystems; journeys: 
 
     return {
       id: journeyId,
+      title: o.item,
       customerId: o.customer.id,
       orderId: o.orderId,
       objective: `Deliver ${o.item} by promised time`,
@@ -144,5 +149,43 @@ export function seed(scenario: Scenario): { systems: BusinessSystems; journeys: 
     };
   });
 
+  journeys.push(seedOrderSyncJourney(systems, scenario));
   return { systems, journeys };
+}
+
+function seedOrderSyncJourney(systems: BusinessSystems, scenario: Scenario): Journey {
+  const orderId = 'ORD-1297';
+  const customerId = 'C107';
+  const item = 'Noise-cancelling headphones';
+  const sku = 'AUD-NC9';
+  const amount = 189_000;
+  systems.customers.set(customerId, {
+    id: customerId,
+    name: 'Bola Ogunleye',
+    email: 'bola@example.com',
+    phone: '+2348010000011',
+    tier: 'standard',
+    preferences: { channel: 'email' },
+    history: { previousDelays: 0, supportContacts: 1 },
+  });
+  systems.supportHistory.push({ customerId, at: '2026-08-02T15:20:00+01:00', topic: 'Charged but no order confirmation' });
+  systems.checkouts.set(orderId, { orderId, customerId, item, sku, amount, zone: 'Yaba', transitMinutes: 150 });
+  systems.stock.set(sku, scenario === 'constrained' ? 0 : 3);
+
+  const journeyId = ORDER_SYNC_JOURNEY_ID;
+  return {
+    id: journeyId,
+    title: item,
+    customerId,
+    orderId,
+    objective: 'Confirm the order within 5 minutes of payment',
+    currentState: 'checkout',
+    expectedState: 'order_confirmed',
+    deadline: '2026-10-04T13:05:00+01:00',
+    health: 'healthy',
+    healthScore: 97,
+    events: [
+      { id: `${journeyId}-E0`, journeyId, at: '2026-10-04T12:46:00+01:00', type: 'checkout_started', summary: `Checkout started: ${item}`, payload: { amount } },
+    ],
+  };
 }
