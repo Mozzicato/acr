@@ -1,14 +1,17 @@
 // Recovery policy engine (PRD §11, §13). It is the final authority: an action runs only if it
 // matches a named policy, its evidence holds, and the autonomy level permits it.
 
-import type { AutonomyLevel, Courier, Order, PolicyDecision, PolicyVerdict, RecoveryOption } from './types';
+import type { AutonomyLevel, PolicyDecision, PolicyVerdict, RecoveryOption } from './types';
 
-export const MAX_COURIER_CAPACITY = 0.9;
+/** Reversals above this need an operator even at Level 2. */
+export const AUTO_REVERSAL_LIMIT = 1_000_000;
 
 export const POLICIES = {
-  'DELIVERY-REASSIGN-01': 'Reassign when payment is confirmed, stock is reserved, the original courier is unavailable, and an alternate courier in the same zone has capacity below 90% and keeps the promised delivery time.',
-  'ORDER-REPLAY-01': 'Recreate an order from its checkout when the payment is captured, no order exists for that payment (no duplicates), the captured amount matches the cart, the order webhook is recorded as failed, and stock is available.',
-  'FINANCIAL-HOLD-01': 'Credits and refunds are Level 3 actions that need human approval. They are not executable in the MVP.',
+  'TRANSFER-REVERSAL-01': 'Reverse a transfer when the debit posted, the NIP switch reports a final failure (not "in progress"), and it has not already been reversed. Above ₦1,000,000 an operator must approve.',
+  'TRANSFER-RETRY-01': 'Never resend money without the customer\'s say-so. Retrying is the customer\'s decision.',
+  'BILL-REDELIVER-01': 'Redeliver a token when the customer was debited and the biller confirms it vended a token that the customer never received.',
+  'BILL-REVERSAL-01': 'Reverse a bill payment only when the biller confirms the vend failed. Never when a token exists, and never while the status is unknown.',
+  'FINANCIAL-HOLD-01': 'Goodwill credits move the bank\'s money. They are Level 3 actions that need human approval and are not executable in the MVP.',
   'ESCALATE-01': 'Hand off to a human whenever no autonomous recovery is authorized.',
 } as const;
 
@@ -18,78 +21,73 @@ export const AUTONOMY_LEVELS: Record<AutonomyLevel, { name: string; summary: str
   2: { name: 'Autonomous', summary: 'ACR runs low-risk recoveries on its own.' },
 };
 
-/** Facts the policy engine checks for itself rather than trusting the agent's plan. */
+/** Facts the policy engine checks for itself, from the systems of record, rather than trusting the agent. */
 export type PolicyFacts =
   | {
-      kind: 'courier_rejected';
-      order: Order;
-      paymentConfirmed: boolean;
-      inventoryReserved: boolean;
-      originalCourierUnavailable: boolean;
-      candidate: Courier | null;
+      kind: 'transfer_not_credited';
+      transactionId: string;
+      amount: number;
+      debitPosted: boolean;
+      nipFinal: boolean;
+      nipCode: string;
+      alreadyReversed: boolean;
     }
   | {
-      kind: 'order_not_created';
-      orderId: string;
-      paymentCaptured: boolean;
-      capturedAmount: number;
-      cartAmount: number;
-      orderExists: boolean;
-      webhookFailed: boolean;
-      stockOnHand: number;
+      kind: 'bill_token_missing';
+      transactionId: string;
+      amount: number;
+      debitPosted: boolean;
+      vendStatus: 'successful' | 'failed' | 'unknown';
+      tokenAvailable: boolean;
+      delivered: boolean;
+      alreadyReversed: boolean;
     };
 
-export function eligibilityProblems(order: Order, courier: Courier, projectedEta: string): string[] {
-  const problems: string[] = [];
-  if (!courier.available) problems.push('unavailable');
-  if (courier.zone !== order.zone) problems.push(`serves ${courier.zone}, not ${order.zone}`);
-  if (courier.capacity >= MAX_COURIER_CAPACITY) problems.push(`capacity ${Math.round(courier.capacity * 100)}% ≥ 90%`);
-  if (Date.parse(projectedEta) > Date.parse(order.promisedBy)) problems.push('would miss promised time');
-  return problems;
-}
-
-function levelReason(allowed: boolean, level: AutonomyLevel, failures: string[]): string {
-  if (!allowed) return `Blocked: ${failures.join('; ')}.`;
-  if (level === 2) return 'All conditions met. Level 2 allows autonomous execution.';
-  if (level === 1) return 'All conditions met. Level 1 needs operator approval.';
-  return 'All conditions met, but Level 0 only observes.';
-}
-
-function notApplicable(action: RecoveryOption['action'], policy: string): PolicyVerdict {
-  return { action, policy, allowed: false, autonomous: false, reason: 'Blocked: not applicable to this failure.' };
+function verdict(option: RecoveryOption, policy: string, failures: string[], level: AutonomyLevel, needsOperator?: string): PolicyVerdict {
+  const allowed = failures.length === 0;
+  const autonomous = allowed && level === 2 && !needsOperator;
+  let reason: string;
+  if (!allowed) reason = `Blocked: ${failures.join('; ')}.`;
+  else if (needsOperator) reason = `All conditions met, but ${needsOperator}: needs operator approval.`;
+  else if (level === 2) reason = 'All conditions met. Level 2 allows autonomous execution.';
+  else if (level === 1) reason = 'All conditions met. Level 1 needs operator approval.';
+  else reason = 'All conditions met, but Level 0 only observes.';
+  return { action: option.action, policy, allowed, autonomous, reason };
 }
 
 function verdictFor(option: RecoveryOption, facts: PolicyFacts, level: AutonomyLevel): PolicyVerdict {
+  const wrongTarget = option.transactionId !== facts.transactionId ? ['targets a different transaction'] : [];
   switch (option.action) {
-    case 'reassign_courier': {
-      if (facts.kind !== 'courier_rejected') return notApplicable(option.action, 'DELIVERY-REASSIGN-01');
-      const failures: string[] = [];
-      if (!facts.paymentConfirmed) failures.push('payment not confirmed');
-      if (!facts.inventoryReserved) failures.push('stock not reserved');
-      if (!facts.originalCourierUnavailable) failures.push('original courier still available');
-      if (!facts.candidate || !option.projectedEta || facts.candidate.id !== option.courierId) {
-        failures.push('no eligible alternate courier');
-      } else {
-        failures.push(...eligibilityProblems(facts.order, facts.candidate, option.projectedEta).map((p) => `${facts.candidate!.name} ${p}`));
-      }
-      const allowed = failures.length === 0;
-      return { action: option.action, policy: 'DELIVERY-REASSIGN-01', allowed, autonomous: allowed && level === 2, reason: levelReason(allowed, level, failures) };
+    case 'reverse_transfer': {
+      if (facts.kind !== 'transfer_not_credited') return verdict(option, 'TRANSFER-REVERSAL-01', ['not applicable to this failure'], level);
+      const failures = [...wrongTarget];
+      if (!facts.debitPosted) failures.push('no debit to reverse');
+      if (!facts.nipFinal) failures.push(`NIP status ${facts.nipCode} is not final, so the money may still land and a reversal could pay twice`);
+      if (facts.alreadyReversed) failures.push('already reversed');
+      const overLimit = facts.amount > AUTO_REVERSAL_LIMIT ? 'amount is above the ₦1,000,000 autonomous limit' : undefined;
+      return verdict(option, 'TRANSFER-REVERSAL-01', failures, level, overLimit);
     }
-    case 'recreate_order': {
-      if (facts.kind !== 'order_not_created') return notApplicable(option.action, 'ORDER-REPLAY-01');
-      const failures: string[] = [];
-      if (!facts.paymentCaptured) failures.push('payment not captured');
-      if (facts.orderExists) failures.push('an order already exists for this payment');
-      if (facts.capturedAmount !== facts.cartAmount) failures.push('captured amount differs from cart');
-      if (!facts.webhookFailed) failures.push('no failed order webhook on record');
-      if (facts.stockOnHand < 1) failures.push('item out of stock');
-      if (option.orderId !== facts.orderId) failures.push('order differs from the paid checkout');
-      const allowed = failures.length === 0;
-      return { action: option.action, policy: 'ORDER-REPLAY-01', allowed, autonomous: allowed && level === 2, reason: levelReason(allowed, level, failures) };
+    case 'retry_transfer':
+      return verdict(option, 'TRANSFER-RETRY-01', ['resending money needs the customer\'s confirmation'], level);
+    case 'redeliver_token': {
+      if (facts.kind !== 'bill_token_missing') return verdict(option, 'BILL-REDELIVER-01', ['not applicable to this failure'], level);
+      const failures = [...wrongTarget];
+      if (!facts.debitPosted) failures.push('customer was not debited');
+      if (facts.vendStatus !== 'successful' || !facts.tokenAvailable) failures.push(`biller vend status is "${facts.vendStatus}", no token to deliver`);
+      if (facts.delivered) failures.push('token already delivered');
+      return verdict(option, 'BILL-REDELIVER-01', failures, level);
     }
-    case 'delay_with_credit':
-    case 'refund':
-      return { action: option.action, policy: 'FINANCIAL-HOLD-01', allowed: false, autonomous: false, reason: 'Blocked: financial action, needs Level 3 human approval.' };
+    case 'reverse_bill_payment': {
+      if (facts.kind !== 'bill_token_missing') return verdict(option, 'BILL-REVERSAL-01', ['not applicable to this failure'], level);
+      const failures = [...wrongTarget];
+      if (facts.vendStatus === 'successful') failures.push('the biller vended a token, so the customer got what they paid for');
+      if (facts.vendStatus === 'unknown') failures.push('vend status unknown, so the token may still arrive');
+      if (facts.alreadyReversed) failures.push('already reversed');
+      const overLimit = facts.amount > AUTO_REVERSAL_LIMIT ? 'amount is above the ₦1,000,000 autonomous limit' : undefined;
+      return verdict(option, 'BILL-REVERSAL-01', failures, level, overLimit);
+    }
+    case 'goodwill_credit':
+      return verdict(option, 'FINANCIAL-HOLD-01', ['moves the bank\'s money, needs Level 3 human approval'], level);
     case 'human_review':
       return { action: option.action, policy: 'ESCALATE-01', allowed: true, autonomous: true, reason: 'Always permitted.' };
   }

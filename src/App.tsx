@@ -3,14 +3,16 @@ import { Bot, Clock, Clapperboard, Play, RotateCcw, Zap } from 'lucide-react';
 import { AcrEngine, FAILURES, type EngineState } from './engine/agent';
 import { computeMetrics } from './engine/metrics';
 import { AUTONOMY_LEVELS } from './engine/policy';
-import { DEMO_JOURNEY_ID, ORDER_SYNC_JOURNEY_ID, type Scenario } from './engine/seed';
+import { BANK_NAME, BILL_JOURNEY_ID, DEMO_JOURNEY_ID, type Scenario } from './engine/seed';
+import type { ChatMessage } from './engine/advisor';
 import type { AutonomyLevel, FailureKind } from './engine/types';
 import { getAdvisorStatus, requestAdvice, type AdvisorStatus } from './advisorClient';
 import { formatDateTime, formatTimeSeconds } from './format';
 import { Kpis } from './components/Kpis';
 import { JourneyList } from './components/JourneyList';
 import { IncidentPanel, JourneyPanel } from './components/JourneyDetail';
-import { NotificationPanel, PolicyPanel } from './components/Outcome';
+import { OutcomePanel, PolicyPanel } from './components/Outcome';
+import { CustomerApp } from './components/CustomerApp';
 import { AgentTrace } from './components/AgentTrace';
 import { AuditTrail } from './components/AuditTrail';
 
@@ -19,13 +21,13 @@ const STEP_MS = reducedMotion ? 120 : 520;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const SCENARIOS: Record<Scenario, string> = {
-  recoverable: 'Recoverable: a safe fix exists',
-  constrained: 'Constrained: no safe fix',
+  recoverable: 'Recoverable: status is clear',
+  constrained: 'Constrained: status unclear',
 };
 
 const DEMO_SEQUENCE: Array<[string, FailureKind]> = [
-  [DEMO_JOURNEY_ID, 'courier_rejected'],
-  [ORDER_SYNC_JOURNEY_ID, 'order_not_created'],
+  [DEMO_JOURNEY_ID, 'transfer_not_credited'],
+  [BILL_JOURNEY_ID, 'bill_token_missing'],
 ];
 
 export default function App() {
@@ -45,6 +47,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(DEMO_JOURNEY_ID);
   const [error, setError] = useState<string | null>(null);
   const [demoRunning, setDemoRunning] = useState(false);
+  const [chats, setChats] = useState<Record<string, ChatMessage[]>>({});
 
   useEffect(() => { void getAdvisorStatus().then(setAdvisor); }, []);
 
@@ -59,6 +62,7 @@ export default function App() {
     setThinking(null);
     setBusy(false);
     setError(null);
+    setChats({});
   }, [scenario, level]);
 
   /** Reveals new trace steps one at a time, then publishes the engine's state. Returns false if a reset interrupted it. */
@@ -176,6 +180,8 @@ export default function App() {
   const triggers = busy || demoRunning ? [] : engineRef.current.availableTriggers(journey.id);
   const locked = busy || demoRunning;
   const aiActive = useAi && !!advisor?.configured;
+  const customer = state.customers.find((c) => c.id === journey.customerId)!;
+  const record = incident && state.recoveries.filter((r) => r.incidentId === incident.id).at(-1);
 
   return (
     <div className="app">
@@ -183,8 +189,8 @@ export default function App() {
         <div className="brand">
           <div className="brand-mark" aria-hidden="true"><Zap size={20} /></div>
           <div>
-            <h1>ACR</h1>
-            <p>Autonomous Customer Recovery</p>
+            <h1>ACR <span className="brand-for">for {BANK_NAME}</span></h1>
+            <p>Autonomous Customer Recovery · operations console</p>
           </div>
         </div>
         <div className="clock" aria-label="Simulated time">
@@ -217,7 +223,7 @@ export default function App() {
 
       <section className="mission" aria-label="Demo control">
         <div className="mission-copy">
-          <h2>{journey.orderId} · {journey.title}</h2>
+          <h2>{customer.name} · {journey.title}</h2>
           <p>
             {journey.objective} (deadline {formatDateTime(journey.deadline)}). {AUTONOMY_LEVELS[level].summary}{' '}
             {aiActive ? `The planner reasons with ${advisor!.model}, and policy has the final say.` : 'The planner uses deterministic rules.'}
@@ -242,16 +248,21 @@ export default function App() {
 
       <div className="grid">
         <div className="col">
+          <CustomerApp
+            key={`${customer.id}-${state.scenario}`}
+            state={state}
+            customerId={customer.id}
+            chat={chats[customer.id] ?? []}
+            onChat={(messages) => setChats((c) => ({ ...c, [customer.id]: messages }))}
+            aiEnabled={aiActive}
+          />
           <JourneyList state={state} selectedId={journey.id} onSelect={setSelectedId} />
         </div>
         <div className="col">
           {incident && <IncidentPanel incident={incident} busy={busy} onApprove={() => void decide(incident.id, true)} onReject={() => void decide(incident.id, false)} />}
           {incident && state.options[incident.id] && <PolicyPanel options={state.options[incident.id]} decision={state.decisions[incident.id]} />}
-          {incident && ['resolved', 'escalated', 'observing'].includes(incident.status) && (
-            <NotificationPanel
-              notification={state.notifications.filter((n) => n.incidentId === incident.id).at(-1)}
-              record={state.recoveries.filter((r) => r.incidentId === incident.id).at(-1)}
-            />
+          {incident && record && (
+            <OutcomePanel notification={state.notifications.filter((n) => n.incidentId === incident.id).at(-1)} record={record} />
           )}
           <JourneyPanel journey={journey} />
         </div>
@@ -259,7 +270,7 @@ export default function App() {
           <AgentTrace
             steps={visibleTrace}
             thinking={thinking}
-            idleText={`Watching ${state.journeys.length} journeys. No incidents on ${journey.orderId}. Simulate a courier rejection to see ACR detect, investigate, decide, act, verify and notify.`}
+            idleText={`Watching ${state.journeys.length} customer journeys. Nothing wrong with ${customer.name.split(' ')[0]}'s right now. Simulate a failure to see ACR detect, investigate, decide, act, verify and tell the customer.`}
           />
         </div>
       </div>
@@ -269,8 +280,8 @@ export default function App() {
       </div>
 
       <p className="footer-note">
-        Simulated e-commerce delivery recovery (PRD MVP). Business systems are mocked. Detection and policy are deterministic.
-        The LLM may only choose among options that policy permits.
+        {BANK_NAME} and every bank, biller and customer here are fictional. Core banking, the NIP switch and the biller are mocked.
+        Detection and policy are deterministic. The LLM may only choose among options that policy permits, and the support chat cannot move money.
       </p>
     </div>
   );

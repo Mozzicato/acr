@@ -21,7 +21,7 @@ export function AuditTrail({ entries }: { entries: AuditEntry[] }) {
             </thead>
             <tbody>
               {entries.map((e) => {
-                const write = e.tool === 'reassign_delivery' || e.tool === 'send_notification';
+                const write = e.tool === 'post_reversal' || e.tool === 'deliver_token' || e.tool === 'send_notification';
                 return (
                   <tr key={e.id}>
                     <td className="mono">{formatTimeSeconds(e.at)}</td>

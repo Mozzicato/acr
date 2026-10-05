@@ -1,4 +1,4 @@
-import type { AgentAdvice, AgentBriefing } from './engine/advisor';
+import type { AgentAdvice, AgentBriefing, ChatMessage, SupportContext } from './engine/advisor';
 
 export interface AdvisorStatus {
   configured: boolean;
@@ -25,4 +25,16 @@ export async function requestAdvice(briefing: AgentBriefing): Promise<{ advice: 
   const body = (await res.json()) as { advice?: AgentAdvice; model?: string; latencyMs?: number; error?: string };
   if (!res.ok || !body.advice) throw new Error(body.error ?? `Advisor returned ${res.status}`);
   return { advice: body.advice, model: body.model ?? 'LLM', latencyMs: body.latencyMs ?? 0 };
+}
+
+export async function requestSupportReply(context: SupportContext, messages: ChatMessage[]): Promise<string> {
+  const res = await fetch('/api/support/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context, messages }),
+    signal: AbortSignal.timeout(25_000),
+  });
+  const body = (await res.json()) as { reply?: string; error?: string };
+  if (!res.ok || !body.reply) throw new Error(body.error ?? `Support returned ${res.status}`);
+  return body.reply;
 }

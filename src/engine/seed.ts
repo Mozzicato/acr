@@ -1,191 +1,126 @@
-// Demo scenarios. PRD §10: a laptop order in Lekki whose courier rejects the route at 13:00.
-// Second failure type: a headphones checkout whose payment is captured but whose order is never created.
+// Demo data for NovaBank, a fictional retail bank. All names, banks and billers are made up.
+// Demo 1: Adaeze sends ₦85,000 to another bank at 13:00; she is debited but the money never lands.
+// Demo 2: Bola buys a ₦20,000 electricity token; she is debited but the token never arrives.
 
-import { BusinessSystems } from './systems';
-import type { Courier, Journey, JourneyEvent, Zone } from './types';
+import { BankSystems, type Faults } from './systems';
+import type { Customer, Journey, JourneyEvent, Transaction } from './types';
 
-export const DEMO_JOURNEY_ID = 'JRN-1292';
-export const ORDER_SYNC_JOURNEY_ID = 'JRN-1297';
+export const BANK_NAME = 'NovaBank';
+export const DEMO_JOURNEY_ID = 'JRN-2041';
+export const BILL_JOURNEY_ID = 'JRN-2047';
 export const DEMO_START = '2026-10-04T12:59:00+01:00';
 
-/** Recoverable: a safe automated fix exists. Constrained: none does, so ACR must escalate. */
+/** Recoverable: a safe automated fix exists. Constrained: the status is unclear, so ACR must not act. */
 export type Scenario = 'recoverable' | 'constrained';
 
-interface OrderSeed {
-  orderId: string;
-  customer: { id: string; name: string; tier: 'standard' | 'priority'; channel: 'sms' | 'email'; previousDelays: number };
-  item: string;
-  sku: string;
-  amount: number;
-  zone: Zone;
-  courierId: string;
-  status: 'courier_assigned' | 'in_transit';
-  orderedAt: string;
-  promisedBy: string;
-  transitMinutes: number;
+const FAULTS: Record<Scenario, Faults> = {
+  recoverable: { nip: 'failed_final', biller: 'vended_undelivered' },
+  constrained: { nip: 'pending_unknown', biller: 'unknown' },
+};
+
+/** The transfer and token purchase the demo customers are about to make. */
+export const DEMO_TRANSFER = {
+  amount: 85_000,
+  beneficiary: { name: 'Tunde Adeyemi', bank: 'Lagoon Bank', account: '2093318841' },
+};
+export const DEMO_BILL = { amount: 20_000, biller: 'Lumen Power', meter: '4502-1187-336' };
+
+interface Persona {
+  id: string;
+  name: string;
+  tier: 'standard' | 'premier';
+  channel: 'push' | 'sms';
+  balance: number;
+  failedTransactions: number;
+  title: string;
+  /** Completed activity shown in the journey and the customer's app. */
+  done: Array<Omit<Transaction, 'id' | 'accountNumber' | 'status'> & { status?: Transaction['status'] }>;
 }
 
-const ORDERS: OrderSeed[] = [
+const at = (hhmm: string, day = '04') => `2026-10-${day}T${hhmm}:00+01:00`;
+
+const PERSONAS: Persona[] = [
   {
-    orderId: 'ORD-1292',
-    customer: { id: 'C102', name: 'Adaeze Okafor', tier: 'priority', channel: 'sms', previousDelays: 2 },
-    item: 'ThinkBook 14 laptop',
-    sku: 'LAP-TB14-16G',
-    amount: 845_000,
-    zone: 'Lekki',
-    courierId: 'CR-SWIFT',
-    status: 'courier_assigned',
-    orderedAt: '2026-10-04T09:00:00+01:00',
-    promisedBy: '2026-10-05T12:00:00+01:00',
-    transitMinutes: 180,
+    id: 'C201', name: 'Adaeze Okafor', tier: 'premier', channel: 'push', balance: 497_300, failedTransactions: 2,
+    title: 'Transfer ₦85,000 to Tunde Adeyemi',
+    done: [
+      { type: 'inflow', amount: 650_000, direction: 'credit', narration: 'Salary: Brightwave Ltd', at: at('09:12', '01') },
+      { type: 'card', amount: 23_400, direction: 'debit', narration: 'Card: Shoprite Lekki', at: at('18:40', '03') },
+      { type: 'bill_payment', amount: 5_000, direction: 'debit', narration: 'Airtime top-up', at: at('08:05') },
+    ],
   },
-  order('ORD-1287', 'C097', 'Chinedu Bello', 'Air fryer 5L', 'KIT-AF5', 89_500, 'Yaba', 'CR-MAIN', 'in_transit', '07:42', 'standard'),
-  order('ORD-1288', 'C098', 'Fatima Yusuf', 'Running shoes', 'SHO-RN42', 54_000, 'Ikeja', 'CR-IKJ', 'courier_assigned', '08:15', 'standard'),
-  order('ORD-1289', 'C099', 'Emeka Nwosu', 'Office chair', 'FUR-OC2', 132_000, 'Lekki', 'CR-LAGOON', 'in_transit', '08:31', 'priority'),
-  order('ORD-1290', 'C100', 'Zainab Ibrahim', 'Blender', 'KIT-BL1', 38_700, 'Yaba', 'CR-YABA', 'courier_assigned', '08:47', 'standard'),
-  order('ORD-1291', 'C101', 'Tunde Adeyemi', 'Smartwatch', 'WRB-SW3', 112_000, 'Ikeja', 'CR-ALAUSA', 'in_transit', '08:52', 'standard'),
-  order('ORD-1293', 'C103', 'Ngozi Eze', 'Rice cooker', 'KIT-RC2', 46_200, 'Lekki', 'CR-EKO', 'courier_assigned', '09:20', 'standard'),
-  order('ORD-1294', 'C104', 'Ibrahim Musa', 'Bluetooth speaker', 'AUD-BS7', 61_900, 'Ikeja', 'CR-IKJ', 'courier_assigned', '10:05', 'standard'),
-  order('ORD-1295', 'C105', 'Kemi Alade', 'Phone case bundle', 'ACC-PC4', 12_500, 'Yaba', 'CR-MAIN', 'courier_assigned', '10:40', 'standard'),
-  order('ORD-1296', 'C106', 'Segun Bakare', 'Gaming monitor', 'MON-G27', 298_000, 'Lekki', 'CR-LAGOON', 'courier_assigned', '11:12', 'priority'),
+  {
+    id: 'C207', name: 'Bola Ogunleye', tier: 'standard', channel: 'push', balance: 136_750, failedTransactions: 0,
+    title: 'Buy ₦20,000 Lumen Power token',
+    done: [
+      { type: 'inflow', amount: 150_000, direction: 'credit', narration: 'Transfer from Kemi Alade', at: at('10:30', '02') },
+      { type: 'card', amount: 8_250, direction: 'debit', narration: 'Card: Chicken Republic', at: at('13:15', '03') },
+    ],
+  },
+  persona('C202', 'Chinedu Bello', 'Transfer ₦40,000 to Ifeoma Nnaji', [{ type: 'nip_transfer', amount: 40_000, direction: 'debit', narration: 'Transfer to Ifeoma Nnaji', at: at('09:41') }]),
+  persona('C203', 'Fatima Yusuf', 'Pay ₦12,500 at Ikeja City Mall', [{ type: 'card', amount: 12_500, direction: 'debit', narration: 'Card: Ikeja City Mall', at: at('10:02') }]),
+  persona('C204', 'Emeka Nwosu', 'Receive ₦310,000 salary', [{ type: 'inflow', amount: 310_000, direction: 'credit', narration: 'Salary: Harbor Logistics', at: at('10:20') }]),
+  persona('C205', 'Zainab Ibrahim', 'Buy ₦2,000 airtime', [{ type: 'bill_payment', amount: 2_000, direction: 'debit', narration: 'Airtime top-up', at: at('11:05') }]),
+  persona('C206', 'Tunde Bakare', 'Transfer ₦150,000 to Segun Bakare', [{ type: 'nip_transfer', amount: 150_000, direction: 'debit', narration: 'Transfer to Segun Bakare', at: at('11:32') }]),
+  persona('C208', 'Ngozi Eze', 'Pay ₦7,800 TV subscription', [{ type: 'bill_payment', amount: 7_800, direction: 'debit', narration: 'TV subscription', at: at('11:58') }]),
+  persona('C209', 'Ibrahim Musa', 'Pay ₦64,000 at Hubmart', [{ type: 'card', amount: 64_000, direction: 'debit', narration: 'Card: Hubmart Ikoyi', at: at('12:20') }]),
+  persona('C210', 'Kemi Alade', 'Transfer ₦25,000 to Bola Ogunleye', [{ type: 'nip_transfer', amount: 25_000, direction: 'debit', narration: 'Transfer to Bola Ogunleye', at: at('12:41') }]),
 ];
 
-function order(
-  orderId: string, customerId: string, name: string, item: string, sku: string, amount: number,
-  zone: Zone, courierId: string, status: OrderSeed['status'], hhmm: string, tier: 'standard' | 'priority',
-): OrderSeed {
-  return {
-    orderId,
-    customer: { id: customerId, name, tier, channel: tier === 'priority' ? 'sms' : 'email', previousDelays: 0 },
-    item, sku, amount, zone, courierId, status,
-    orderedAt: `2026-10-04T${hhmm}:00+01:00`,
-    promisedBy: '2026-10-05T18:00:00+01:00',
-    transitMinutes: 150,
-  };
+function persona(id: string, name: string, title: string, done: Persona['done']): Persona {
+  return { id, name, tier: 'standard', channel: 'push', balance: 180_000, failedTransactions: 0, title, done };
 }
 
-function couriers(scenario: Scenario): Courier[] {
-  // A saturated network leaves no Lekki courier with room for another route.
-  const saturated = scenario === 'constrained';
-  return [
-    { id: 'CR-SWIFT', name: 'Swift Dispatch', zone: 'Lekki', capacity: 0.97, available: true, pickupMinutes: 40 },
-    { id: 'CR-LAGOON', name: 'Lagoon Express', zone: 'Lekki', capacity: saturated ? 0.98 : 0.62, available: !saturated, pickupMinutes: 45 },
-    { id: 'CR-EKO', name: 'Eko Riders', zone: 'Lekki', capacity: 0.93, available: true, pickupMinutes: 30 },
-    { id: 'CR-MAIN', name: 'Mainland Couriers', zone: 'Yaba', capacity: 0.7, available: true, pickupMinutes: 35 },
-    { id: 'CR-YABA', name: 'Yaba Bikes', zone: 'Yaba', capacity: 0.55, available: true, pickupMinutes: 25 },
-    { id: 'CR-IKJ', name: 'Ikeja Express', zone: 'Ikeja', capacity: 0.8, available: true, pickupMinutes: 40 },
-    { id: 'CR-ALAUSA', name: 'Alausa Dispatch', zone: 'Ikeja', capacity: 0.5, available: true, pickupMinutes: 30 },
-  ];
-}
+export function seed(scenario: Scenario): { systems: BankSystems; journeys: Journey[] } {
+  const systems = new BankSystems(FAULTS[scenario]);
+  systems.bankStatus.set(DEMO_TRANSFER.beneficiary.bank, 'up');
 
-const plus = (iso: string, minutes: number) => new Date(Date.parse(iso) + minutes * 60_000).toISOString();
-
-export function seed(scenario: Scenario): { systems: BusinessSystems; journeys: Journey[] } {
-  const systems = new BusinessSystems();
-  for (const c of couriers(scenario)) systems.couriers.set(c.id, c);
-  for (const o of ORDERS) systems.stock.set(o.sku, 5);
-
-  const journeys = ORDERS.map((o, index): Journey => {
-    const slug = o.customer.name.split(' ')[0].toLowerCase();
-    systems.customers.set(o.customer.id, {
-      id: o.customer.id,
-      name: o.customer.name,
+  const journeys = PERSONAS.map((p, index): Journey => {
+    const accountNumber = `01${String(23456700 + index * 1137).padStart(8, '0')}`;
+    const slug = p.name.split(' ')[0].toLowerCase();
+    const customer: Customer = {
+      id: p.id,
+      name: p.name,
       email: `${slug}@example.com`,
-      phone: `+23480100000${String(index).padStart(2, '0')}`,
-      tier: o.customer.tier,
-      preferences: { channel: o.customer.channel },
-      history: { previousDelays: o.customer.previousDelays, supportContacts: o.customer.previousDelays },
-    });
-    const courier = systems.getCourier(o.courierId);
-    const assignedAt = plus(o.orderedAt, 60);
-    systems.orders.set(o.orderId, {
-      id: o.orderId,
-      customerId: o.customer.id,
-      item: o.item,
-      sku: o.sku,
-      amount: o.amount,
-      zone: o.zone,
-      status: o.status,
-      courierId: o.courierId,
-      promisedBy: o.promisedBy,
-      eta: plus(assignedAt, courier.pickupMinutes + o.transitMinutes),
-      transitMinutes: o.transitMinutes,
-    });
-    systems.payments.set(o.orderId, { orderId: o.orderId, status: 'confirmed', amount: o.amount, reference: `PAY-${o.orderId.slice(4)}` });
-    systems.inventory.set(o.orderId, { sku: o.sku, orderId: o.orderId, reserved: true, warehouse: 'WH-Lagos-01' });
-    for (let d = 0; d < o.customer.previousDelays; d += 1) {
-      systems.supportHistory.push({ customerId: o.customer.id, at: `2026-0${7 + d}-1${d}T10:00:00+01:00`, topic: 'Late delivery' });
+      phone: `+23480200000${String(index).padStart(2, '0')}`,
+      tier: p.tier,
+      accountNumber,
+      preferences: { channel: p.channel },
+      history: { failedTransactions: p.failedTransactions, supportContacts: p.failedTransactions },
+    };
+    systems.customers.set(p.id, customer);
+    systems.accounts.set(accountNumber, { number: accountNumber, customerId: p.id, balance: p.balance, status: 'active' });
+    for (let d = 0; d < p.failedTransactions; d += 1) {
+      systems.supportHistory.push({ customerId: p.id, at: `2026-0${7 + d}-1${d}T10:00:00+01:00`, topic: 'Transfer debited but not received' });
     }
+    // Starting balances already include the history, so record it without moving money again.
+    const done = p.done.map((d, i): Transaction => ({ ...d, id: `HIS-${p.id}-${i}`, accountNumber, status: d.status ?? 'successful' }));
+    for (const tx of done) systems.transactions.set(tx.id, tx);
 
-    const journeyId = `JRN-${o.orderId.slice(4)}`;
-    const ev = (minutes: number, type: string, summary: string, payload: Record<string, unknown> = {}): JourneyEvent => ({
-      id: `${journeyId}-E${minutes}`,
-      journeyId,
-      at: plus(o.orderedAt, minutes),
-      type,
-      summary,
-      payload,
-    });
-    const events = [
-      ev(0, 'order_placed', `Ordered ${o.item}`, { amount: o.amount }),
-      ev(1, 'payment_confirmed', 'Payment confirmed', { reference: `PAY-${o.orderId.slice(4)}` }),
-      ev(3, 'order_accepted', 'Order accepted, stock reserved', { warehouse: 'WH-Lagos-01' }),
-      ev(60, 'courier_assigned', `Courier assigned: ${courier.name}`, { courierId: courier.id }),
-    ];
-    if (o.status === 'in_transit') events.push(ev(110, 'parcel_collected', 'Parcel collected by courier'));
+    const journeyId = p.id === 'C201' ? DEMO_JOURNEY_ID : p.id === 'C207' ? BILL_JOURNEY_ID : `JRN-${2050 + index}`;
+    const ev = (iso: string, type: string, summary: string, payload: Record<string, unknown> = {}): JourneyEvent =>
+      ({ id: `${journeyId}-${type}-${iso}`, journeyId, at: iso, type, summary, payload });
+    const isDemo = journeyId === DEMO_JOURNEY_ID || journeyId === BILL_JOURNEY_ID;
+    const last = done.at(-1)!;
 
     return {
       id: journeyId,
-      title: o.item,
-      customerId: o.customer.id,
-      orderId: o.orderId,
-      objective: `Deliver ${o.item} by promised time`,
-      currentState: o.status,
-      expectedState: 'delivered',
-      deadline: o.promisedBy,
+      title: p.title,
+      customerId: p.id,
+      transactionId: isDemo ? '' : last.id,
+      objective: journeyId === DEMO_JOURNEY_ID ? 'Money reaches the beneficiary, or comes back fast'
+        : journeyId === BILL_JOURNEY_ID ? 'Token delivered within 5 minutes of payment'
+        : 'Transaction completes as expected',
+      currentState: journeyId === DEMO_JOURNEY_ID ? 'composing_transfer' : journeyId === BILL_JOURNEY_ID ? 'composing_bill' : 'completed',
+      expectedState: 'completed',
+      deadline: isDemo ? at('13:15') : last.at,
       health: 'healthy',
-      healthScore: 96 - (index % 4),
-      events,
+      healthScore: 97 - (index % 4),
+      events: isDemo
+        ? [ev(at('12:57'), 'app_session_started', 'Opened the mobile app'), ev(at('12:58'), 'payment_screen_opened', `Started: ${p.title}`)]
+        : [ev(last.at, `${last.type}_completed`, last.narration, { amount: last.amount })],
     };
   });
 
-  journeys.push(seedOrderSyncJourney(systems, scenario));
   return { systems, journeys };
-}
-
-function seedOrderSyncJourney(systems: BusinessSystems, scenario: Scenario): Journey {
-  const orderId = 'ORD-1297';
-  const customerId = 'C107';
-  const item = 'Noise-cancelling headphones';
-  const sku = 'AUD-NC9';
-  const amount = 189_000;
-  systems.customers.set(customerId, {
-    id: customerId,
-    name: 'Bola Ogunleye',
-    email: 'bola@example.com',
-    phone: '+2348010000011',
-    tier: 'standard',
-    preferences: { channel: 'email' },
-    history: { previousDelays: 0, supportContacts: 1 },
-  });
-  systems.supportHistory.push({ customerId, at: '2026-08-02T15:20:00+01:00', topic: 'Charged but no order confirmation' });
-  systems.checkouts.set(orderId, { orderId, customerId, item, sku, amount, zone: 'Yaba', transitMinutes: 150 });
-  systems.stock.set(sku, scenario === 'constrained' ? 0 : 3);
-
-  const journeyId = ORDER_SYNC_JOURNEY_ID;
-  return {
-    id: journeyId,
-    title: item,
-    customerId,
-    orderId,
-    objective: 'Confirm the order within 5 minutes of payment',
-    currentState: 'checkout',
-    expectedState: 'order_confirmed',
-    deadline: '2026-10-04T13:05:00+01:00',
-    health: 'healthy',
-    healthScore: 97,
-    events: [
-      { id: `${journeyId}-E0`, journeyId, at: '2026-10-04T12:46:00+01:00', type: 'checkout_started', summary: `Checkout started: ${item}`, payload: { amount } },
-    ],
-  };
 }

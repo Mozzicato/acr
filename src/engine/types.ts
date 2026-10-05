@@ -1,58 +1,41 @@
-// Domain model for the ACR MVP (PRD §14), scoped to e-commerce delivery recovery.
-
-export type Zone = 'Lekki' | 'Yaba' | 'Ikeja';
+// Domain model for ACR in retail banking (PRD §14), embedded in a bank's mobile app.
 
 export interface Customer {
   id: string;
   name: string;
   email: string;
   phone: string;
-  tier: 'standard' | 'priority';
-  preferences: { channel: 'sms' | 'email' };
-  history: { previousDelays: number; supportContacts: number };
+  tier: 'standard' | 'premier';
+  accountNumber: string;
+  preferences: { channel: 'push' | 'sms' | 'email' };
+  history: { failedTransactions: number; supportContacts: number };
 }
 
-export interface Courier {
-  id: string;
-  name: string;
-  zone: Zone;
-  /** Share of route capacity already committed, 0–1. */
-  capacity: number;
-  available: boolean;
-  /** Minutes from assignment until the courier can collect the parcel. */
-  pickupMinutes: number;
-}
-
-export type OrderStatus = 'created' | 'accepted' | 'courier_assigned' | 'in_transit' | 'delivered';
-
-export interface Order {
-  id: string;
+export interface Account {
+  number: string;
   customerId: string;
-  item: string;
-  sku: string;
-  amount: number;
-  zone: Zone;
-  status: OrderStatus;
-  courierId: string | null;
-  /** Delivery deadline promised to the customer. */
-  promisedBy: string;
-  eta: string;
-  /** Minutes of transit from warehouse to the customer once collected. */
-  transitMinutes: number;
+  balance: number;
+  status: 'active' | 'restricted';
 }
 
-export interface Payment {
-  orderId: string;
-  status: 'confirmed' | 'pending' | 'failed';
-  amount: number;
-  reference: string;
-}
+export type TransactionType = 'nip_transfer' | 'bill_payment' | 'card' | 'inflow' | 'reversal';
 
-export interface InventoryRecord {
-  sku: string;
-  orderId: string;
-  reserved: boolean;
-  warehouse: string;
+export interface Transaction {
+  id: string;
+  accountNumber: string;
+  type: TransactionType;
+  /** Positive amount; `direction` says which way it moved. */
+  amount: number;
+  direction: 'debit' | 'credit';
+  narration: string;
+  status: 'pending' | 'successful' | 'failed' | 'reversed';
+  at: string;
+  /** NIP transfer details. */
+  beneficiary?: { name: string; bank: string; account: string };
+  /** Bill payment details. */
+  bill?: { biller: string; meter: string; token: string | null; delivered: boolean };
+  /** For a reversal: the transaction it reverses. */
+  reverses?: string;
 }
 
 export type Health = 'healthy' | 'at_risk' | 'critical' | 'recovered' | 'escalated';
@@ -68,10 +51,11 @@ export interface JourneyEvent {
 
 export interface Journey {
   id: string;
-  /** What the customer bought, for display. */
+  /** What the customer is doing, for display. */
   title: string;
   customerId: string;
-  orderId: string;
+  /** The transaction this journey is about, once it exists. */
+  transactionId: string;
   objective: string;
   currentState: string;
   expectedState: string;
@@ -93,12 +77,16 @@ export type IncidentStatus =
   | 'resolved'
   | 'escalated';
 
+export type FailureKind = 'transfer_not_credited' | 'bill_token_missing';
+
+export type ActionId = 'reverse_transfer' | 'retry_transfer' | 'redeliver_token' | 'reverse_bill_payment' | 'goodwill_credit' | 'human_review';
+
 export interface Incident {
   id: string;
   journeyId: string;
   kind: FailureKind;
   severity: Severity;
-  /** Probability (0–100) that the journey fails without intervention. */
+  /** Probability (0–100) that the customer complains without intervention. */
   risk: number;
   rule: string;
   ruleDescription: string;
@@ -114,21 +102,15 @@ export interface Incident {
   resolvedAt: string | null;
 }
 
-export type FailureKind = 'courier_rejected' | 'order_not_created';
-
-export type ActionId = 'reassign_courier' | 'recreate_order' | 'delay_with_credit' | 'refund' | 'human_review';
-
 export interface RecoveryOption {
   action: ActionId;
   label: string;
   successProbability: number;
+  /** Cost to the bank. Returning the customer's own money costs the bank nothing. */
   costNgn: number;
   customerImpact: 'low' | 'medium' | 'high';
-  /** Alternate courier for a reassignment. */
-  courierId?: string;
-  /** Order to recreate from its captured payment. */
-  orderId?: string;
-  projectedEta?: string;
+  /** Transaction the action applies to. */
+  transactionId?: string;
 }
 
 export type AutonomyLevel = 0 | 1 | 2;
@@ -137,7 +119,7 @@ export interface PolicyVerdict {
   action: ActionId;
   policy: string;
   allowed: boolean;
-  /** Whether the current autonomy level lets ACR execute without a human. */
+  /** Whether ACR may execute without a human at the current autonomy level. */
   autonomous: boolean;
   reason: string;
 }
@@ -180,8 +162,9 @@ export interface Notification {
   id: string;
   incidentId: string;
   customerId: string;
-  channel: 'sms' | 'email';
+  channel: 'push' | 'sms' | 'email';
   to: string;
+  title: string;
   body: string;
   at: string;
 }

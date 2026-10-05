@@ -1,7 +1,7 @@
-// Mocked business systems (Order, Payment, Inventory, Logistics, CRM, Notification).
-// They stand in for real APIs; ACR only reaches them through the tool layer.
+// Mocked bank systems: core banking, the NIP interbank switch, the bill-payment gateway, CRM and
+// notifications. They stand in for real APIs; ACR only reaches them through the tool layer.
 
-import type { Courier, Customer, InventoryRecord, Notification, Order, Payment, Zone } from './types';
+import type { Account, Customer, Notification, Transaction } from './types';
 
 export class SimClock {
   private ms: number;
@@ -15,34 +15,31 @@ export class SimClock {
     this.ms += seconds * 1000;
     return this.now();
   }
-  set(iso: string): void {
-    this.ms = Date.parse(iso);
-  }
 }
 
 export const addMinutes = (iso: string, minutes: number): string =>
   new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 
-/** A cart at checkout: everything needed to create its order. */
-export interface Checkout {
-  orderId: string;
-  customerId: string;
-  item: string;
-  sku: string;
-  amount: number;
-  zone: Zone;
-  transitMinutes: number;
+/** What the NIP switch reports for a transfer (transaction status query). */
+export interface NipStatus {
+  sessionId: string;
+  responseCode: string;
+  message: string;
+  /** Whether the status is final. "In progress" is not final, so reversing could double-pay. */
+  final: boolean;
 }
 
-export interface WebhookDelivery {
-  id: string;
-  event: 'order.create';
-  orderId: string;
-  paymentReference: string;
-  status: 'delivered' | 'failed';
-  attempts: number;
-  lastError: string | null;
-  at: string;
+/** What the biller reports for a token purchase (requery). */
+export interface VendStatus {
+  status: 'successful' | 'failed' | 'unknown';
+  token: string | null;
+  units: string | null;
+}
+
+/** How the simulated failures play out. Seeded per scenario. */
+export interface Faults {
+  nip: 'failed_final' | 'pending_unknown';
+  biller: 'vended_undelivered' | 'unknown';
 }
 
 export interface SupportContact {
@@ -51,90 +48,22 @@ export interface SupportContact {
   topic: string;
 }
 
-export class BusinessSystems {
+export class BankSystems {
   readonly customers = new Map<string, Customer>();
-  readonly orders = new Map<string, Order>();
-  readonly payments = new Map<string, Payment>();
-  readonly inventory = new Map<string, InventoryRecord>();
-  readonly couriers = new Map<string, Courier>();
+  readonly accounts = new Map<string, Account>();
+  readonly transactions = new Map<string, Transaction>();
+  readonly nip = new Map<string, NipStatus>();
+  readonly bankStatus = new Map<string, 'up' | 'degraded' | 'down'>();
+  readonly vends = new Map<string, VendStatus>();
   readonly supportHistory: SupportContact[] = [];
-  readonly checkouts = new Map<string, Checkout>();
-  readonly webhooks: WebhookDelivery[] = [];
-  /** Units on hand per SKU. */
-  readonly stock = new Map<string, number>();
   readonly outbox: Notification[] = [];
-  /** Support tickets opened for customers. ACR's goal is to keep this empty. */
+  /** Complaint tickets opened. ACR's goal is to keep this empty. */
   readonly tickets: string[] = [];
+  private seq = 0;
 
-  // Order API
-  getOrder(id: string): Order {
-    return required(this.orders.get(id), `order ${id}`);
-  }
+  constructor(readonly faults: Faults) {}
 
-  findOrder(id: string): Order | null {
-    return this.orders.get(id) ?? null;
-  }
-
-  getCheckout(orderId: string): Checkout {
-    return required(this.checkouts.get(orderId), `checkout ${orderId}`);
-  }
-
-  /** The customer pays at checkout. If the webhook drops, the order service never hears about it. */
-  capturePayment(orderId: string, now: string, webhookFails: boolean): Payment {
-    const checkout = this.getCheckout(orderId);
-    const payment: Payment = { orderId, status: 'confirmed', amount: checkout.amount, reference: `PAY-${orderId.slice(4)}` };
-    this.payments.set(orderId, payment);
-    this.webhooks.push({
-      id: `WH-${String(this.webhooks.length + 1).padStart(4, '0')}`,
-      event: 'order.create',
-      orderId,
-      paymentReference: payment.reference,
-      status: webhookFails ? 'failed' : 'delivered',
-      attempts: webhookFails ? 3 : 1,
-      lastError: webhookFails ? 'HTTP 504 from order-service after 3 retries' : null,
-      at: now,
-    });
-    if (!webhookFails) this.createOrderFromCheckout(orderId, now);
-    return payment;
-  }
-
-  /** Creates the order for a paid checkout. Idempotent: an existing order is never duplicated. */
-  createOrderFromCheckout(orderId: string, now: string): { created: boolean; reason?: string } {
-    if (this.orders.has(orderId)) return { created: false, reason: 'order already exists' };
-    const checkout = this.getCheckout(orderId);
-    if (this.payments.get(orderId)?.status !== 'confirmed') return { created: false, reason: 'payment not captured' };
-    const onHand = this.stock.get(checkout.sku) ?? 0;
-    if (onHand < 1) return { created: false, reason: 'out of stock' };
-    this.stock.set(checkout.sku, onHand - 1);
-    this.inventory.set(orderId, { sku: checkout.sku, orderId, reserved: true, warehouse: 'WH-Lagos-01' });
-    this.orders.set(orderId, {
-      id: orderId,
-      customerId: checkout.customerId,
-      item: checkout.item,
-      sku: checkout.sku,
-      amount: checkout.amount,
-      zone: checkout.zone,
-      status: 'accepted',
-      courierId: null,
-      promisedBy: addMinutes(now, 30 * 60),
-      eta: addMinutes(now, 26 * 60),
-      transitMinutes: checkout.transitMinutes,
-    });
-    for (const w of this.webhooks.filter((w) => w.orderId === orderId)) w.status = 'delivered';
-    return { created: true };
-  }
-
-  // Payment API
-  getPayment(orderId: string): Payment {
-    return required(this.payments.get(orderId), `payment for ${orderId}`);
-  }
-
-  // Inventory API
-  getInventory(orderId: string): InventoryRecord {
-    return required(this.inventory.get(orderId), `inventory for ${orderId}`);
-  }
-
-  // CRM API
+  // ── CRM ──
   getCustomer(id: string): Customer {
     return required(this.customers.get(id), `customer ${id}`);
   }
@@ -143,41 +72,113 @@ export class BusinessSystems {
     return this.supportHistory.filter((c) => c.customerId === customerId);
   }
 
-  // Logistics API
-  getCourier(id: string): Courier {
-    return required(this.couriers.get(id), `courier ${id}`);
+  // ── Core banking ──
+  getAccount(number: string): Account {
+    return required(this.accounts.get(number), `account ${number}`);
   }
 
-  couriersInZone(zone: Zone): Courier[] {
-    return [...this.couriers.values()].filter((c) => c.zone === zone);
+  getTransaction(id: string): Transaction {
+    return required(this.transactions.get(id), `transaction ${id}`);
   }
 
-  /** The courier drops the route; the order is left without a courier. */
-  rejectRoute(orderId: string): Courier {
-    const order = this.getOrder(orderId);
-    const courier = this.getCourier(required(order.courierId, `courier on ${orderId}`));
-    courier.available = false;
-    courier.capacity = 1;
-    order.courierId = null;
-    order.status = 'accepted';
-    return courier;
+  findTransaction(id: string): Transaction | null {
+    return this.transactions.get(id) ?? null;
   }
 
-  /** Offers the route to a courier, who accepts only with spare capacity. */
-  assignCourier(orderId: string, courierId: string, now: string): { accepted: boolean; eta: string } {
-    const order = this.getOrder(orderId);
-    const courier = this.getCourier(courierId);
-    if (!courier.available || courier.capacity >= 1 || courier.zone !== order.zone) {
-      return { accepted: false, eta: order.eta };
-    }
-    courier.capacity = Math.min(1, courier.capacity + 0.04);
-    order.courierId = courierId;
-    order.status = 'courier_assigned';
-    order.eta = addMinutes(now, courier.pickupMinutes + order.transitMinutes);
-    return { accepted: true, eta: order.eta };
+  transactionsFor(accountNumber: string): Transaction[] {
+    return [...this.transactions.values()]
+      .filter((t) => t.accountNumber === accountNumber)
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   }
 
-  // Notification API
+  reversalOf(transactionId: string): Transaction | null {
+    return [...this.transactions.values()].find((t) => t.reverses === transactionId) ?? null;
+  }
+
+  record(tx: Transaction): Transaction {
+    const account = this.getAccount(tx.accountNumber);
+    account.balance += tx.direction === 'credit' ? tx.amount : -tx.amount;
+    this.transactions.set(tx.id, tx);
+    return tx;
+  }
+
+  /** Returns a debit to the customer's account. Idempotent: a transaction is never reversed twice. */
+  postReversal(transactionId: string, now: string): { posted: boolean; reversalId?: string; balance?: number; reason?: string } {
+    const original = this.getTransaction(transactionId);
+    if (original.direction !== 'debit') return { posted: false, reason: 'not a debit' };
+    if (original.status === 'reversed' || this.reversalOf(transactionId)) return { posted: false, reason: 'already reversed' };
+    const reversal = this.record({
+      id: `RVSL-${transactionId}`,
+      accountNumber: original.accountNumber,
+      type: 'reversal',
+      amount: original.amount,
+      direction: 'credit',
+      narration: `Reversal: ${original.narration}`,
+      status: 'successful',
+      at: now,
+      reverses: transactionId,
+    });
+    original.status = 'reversed';
+    return { posted: true, reversalId: reversal.id, balance: this.getAccount(original.accountNumber).balance };
+  }
+
+  // ── NIP interbank switch ──
+  /** The customer sends a transfer. The debit posts; the switch outcome depends on the seeded fault. */
+  sendTransfer(accountNumber: string, amount: number, beneficiary: NonNullable<Transaction['beneficiary']>, now: string): Transaction {
+    const id = `NIP${now.slice(2, 10).replace(/-/g, '')}${String(++this.seq).padStart(4, '0')}`;
+    const tx = this.record({
+      id, accountNumber, type: 'nip_transfer', amount, direction: 'debit',
+      narration: `Transfer to ${beneficiary.name}`, status: 'pending', at: now, beneficiary,
+    });
+    const failed = this.faults.nip === 'failed_final';
+    this.nip.set(id, {
+      sessionId: `000013${id.slice(3)}`,
+      responseCode: failed ? '91' : '09',
+      message: failed ? 'Beneficiary bank not available' : 'Request in progress',
+      final: failed,
+    });
+    if (failed) tx.status = 'failed';
+    this.bankStatus.set(beneficiary.bank, failed ? 'down' : 'degraded');
+    return tx;
+  }
+
+  statusQuery(transactionId: string): NipStatus {
+    return { ...required(this.nip.get(transactionId), `NIP session for ${transactionId}`) };
+  }
+
+  // ── Bill-payment gateway ──
+  /** The customer buys a prepaid token. The debit posts, but the token never reaches them. */
+  buyToken(accountNumber: string, amount: number, biller: string, meter: string, now: string): Transaction {
+    const id = `BIL${now.slice(2, 10).replace(/-/g, '')}${String(++this.seq).padStart(4, '0')}`;
+    const tx = this.record({
+      id, accountNumber, type: 'bill_payment', amount, direction: 'debit',
+      narration: `${biller} prepaid token`, status: 'pending', at: now,
+      bill: { biller, meter, token: null, delivered: false },
+    });
+    const vended = this.faults.biller === 'vended_undelivered';
+    this.vends.set(id, vended
+      ? { status: 'successful', token: '4821-0937-5512-6603-1194', units: `${(amount / 225).toFixed(1)} kWh` }
+      : { status: 'unknown', token: null, units: null });
+    return tx;
+  }
+
+  billerRequery(transactionId: string): VendStatus {
+    return { ...required(this.vends.get(transactionId), `vend for ${transactionId}`) };
+  }
+
+  /** Puts a vended token in front of the customer. Only works if the biller generated one. */
+  deliverToken(transactionId: string): { delivered: boolean; token?: string; reason?: string } {
+    const tx = this.getTransaction(transactionId);
+    const vend = this.vends.get(transactionId);
+    if (!tx.bill) return { delivered: false, reason: 'not a bill payment' };
+    if (vend?.status !== 'successful' || !vend.token) return { delivered: false, reason: 'biller has not confirmed a token' };
+    tx.bill.token = vend.token;
+    tx.bill.delivered = true;
+    tx.status = 'successful';
+    return { delivered: true, token: vend.token };
+  }
+
+  // ── Notifications ──
   send(notification: Notification): Notification {
     this.outbox.push(notification);
     return notification;

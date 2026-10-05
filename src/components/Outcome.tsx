@@ -1,7 +1,7 @@
-import { Mail, MessageSquareText, Scale, Smartphone } from 'lucide-react';
+import { ClipboardCheck, Scale } from 'lucide-react';
 import { AUTONOMY_LEVELS, POLICIES } from '../engine/policy';
 import type { Notification, PolicyDecision, RecoveryOption, RecoveryRecord } from '../engine/types';
-import { formatDateTime, formatNgn, formatTime } from '../format';
+import { formatNgn, formatTime } from '../format';
 import { Panel, StatusBadge } from './ui';
 
 export function PolicyPanel({ options, decision }: { options: RecoveryOption[]; decision: PolicyDecision | undefined }) {
@@ -11,7 +11,7 @@ export function PolicyPanel({ options, decision }: { options: RecoveryOption[]; 
       <div className="panel-body table-scroll">
         <table className="options">
           <thead>
-            <tr><th scope="col">Option</th><th scope="col">Success</th><th scope="col">Cost</th><th scope="col">Impact</th><th scope="col">Policy</th></tr>
+            <tr><th scope="col">Option</th><th scope="col">Success</th><th scope="col">Cost to bank</th><th scope="col">Impact</th><th scope="col">Policy</th></tr>
           </thead>
           <tbody>
             {options.map((o) => {
@@ -19,10 +19,7 @@ export function PolicyPanel({ options, decision }: { options: RecoveryOption[]; 
               const selected = decision?.selected.action === o.action;
               return (
                 <tr key={o.action} className={selected ? 'selected' : ''} aria-current={selected || undefined}>
-                  <td>
-                    {o.label}
-                    {o.projectedEta && <div className="reason">ETA {formatDateTime(o.projectedEta)}</div>}
-                  </td>
+                  <td>{o.label}</td>
                   <td className="mono">{o.successProbability}%</td>
                   <td className="mono">{formatNgn(o.costNgn)}</td>
                   <td>{o.customerImpact}</td>
@@ -44,32 +41,25 @@ export function PolicyPanel({ options, decision }: { options: RecoveryOption[]; 
   );
 }
 
-export function NotificationPanel({ notification, record }: { notification: Notification | undefined; record: RecoveryRecord | undefined }) {
-  const Channel = notification?.channel === 'email' ? Mail : Smartphone;
+export function OutcomePanel({ notification, record }: { notification: Notification | undefined; record: RecoveryRecord }) {
+  const handedOff = record.outcome === 'escalated' || record.outcome === 'failed';
   return (
-    <Panel title="Customer communication" icon={MessageSquareText} aside={notification ? `${notification.channel.toUpperCase()} · ${formatTime(notification.at)}` : undefined}>
+    <Panel title="Recovery outcome" icon={ClipboardCheck} aside={notification ? `${notification.channel.toUpperCase()} sent · ${formatTime(notification.at)}` : undefined}>
       <div className="panel-body">
-        {notification ? (
-          <div className="phone">
-            <div className="phone-meta"><span><Channel size={12} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> {notification.to}</span><span className="mono">{notification.id}</span></div>
-            <p className="bubble" style={{ margin: 0 }}>{notification.body}</p>
-          </div>
-        ) : (
-          <p className="dim" style={{ margin: 0 }}>
-            {record?.outcome === 'escalated' || record?.outcome === 'failed'
-              ? 'Not contacted yet. A human operator owns this incident.'
+        <p className="muted" style={{ margin: 0 }}>
+          {notification
+            ? 'The customer got the message shown in their app.'
+            : handedOff
+              ? 'Not contacted yet. A human agent owns this incident and has ACR\'s full investigation.'
               : 'No message sent. ACR only contacts customers after a verified recovery.'}
-          </p>
-        )}
-        {record && (
-          <div className="outcome-row" aria-label="Recorded outcome">
-            <StatusBadge status={record.outcome === 'successful' ? 'ok' : 'info'}>Outcome: {record.outcome}</StatusBadge>
-            <StatusBadge status="info">Cost: {formatNgn(record.costNgn)}</StatusBadge>
-            <StatusBadge status={record.complaintAvoided ? 'ok' : 'warn'}>Complaint avoided: {record.complaintAvoided ? 'yes' : 'not yet'}</StatusBadge>
-            <StatusBadge status="ok">Support tickets: {record.ticketsCreated}</StatusBadge>
-            <StatusBadge status="ok">Customer actions: {record.customerActionsRequired}</StatusBadge>
-          </div>
-        )}
+        </p>
+        <div className="outcome-row" aria-label="Recorded outcome">
+          <StatusBadge status={record.outcome === 'successful' ? 'ok' : 'info'}>Outcome: {record.outcome}</StatusBadge>
+          <StatusBadge status="info">Cost to bank: {formatNgn(record.costNgn)}</StatusBadge>
+          <StatusBadge status={record.complaintAvoided ? 'ok' : 'warn'}>Complaint avoided: {record.complaintAvoided ? 'yes' : 'not yet'}</StatusBadge>
+          <StatusBadge status="ok">Complaint tickets: {record.ticketsCreated}</StatusBadge>
+          <StatusBadge status="ok">Customer actions: {record.customerActionsRequired}</StatusBadge>
+        </div>
       </div>
     </Panel>
   );

@@ -2,19 +2,18 @@
 // Failure-specific work lives in playbooks; this engine owns the loop, the policy decision,
 // escalation and learning. The planner (LLM or rules) may only propose; policy decides.
 
-import { assessDeliveryRisk, assessOrderSyncRisk, type RiskAssessment } from './detection';
 import { decide } from './policy';
-import { deliveryPlaybook } from './playbooks/delivery';
-import { orderSyncPlaybook } from './playbooks/orderSync';
+import { billTokenPlaybook } from './playbooks/billToken';
+import { transferPlaybook } from './playbooks/transfer';
 import type { Investigation, Playbook, PlaybookContext } from './playbooks/types';
 import { seed, DEMO_START, type Scenario } from './seed';
-import { SimClock, type BusinessSystems } from './systems';
+import { SimClock, type BankSystems } from './systems';
 import { ToolLayer, type Authorization } from './tools';
 import { formatNgn } from '../format';
 import type { AgentAdvice, AgentBriefing } from './advisor';
 import type {
-  Actor, AuditEntry, AutonomyLevel, Courier, FailureKind, Health, Incident, Journey, Notification, Phase,
-  PolicyDecision, RecoveryOption, RecoveryRecord, TraceStep,
+  Account, Actor, AuditEntry, AutonomyLevel, Customer, FailureKind, Health, Incident, Journey, Notification, Phase,
+  PolicyDecision, RecoveryOption, RecoveryRecord, TraceStep, Transaction,
 } from './types';
 
 export interface EngineState {
@@ -30,23 +29,25 @@ export interface EngineState {
   notifications: Notification[];
   recoveries: RecoveryRecord[];
   tickets: string[];
-  couriers: Courier[];
+  customers: Customer[];
+  accounts: Account[];
+  transactions: Transaction[];
 }
 
 const PLAYBOOKS: Record<FailureKind, Playbook> = {
-  courier_rejected: deliveryPlaybook,
-  order_not_created: orderSyncPlaybook,
+  transfer_not_credited: transferPlaybook,
+  bill_token_missing: billTokenPlaybook,
 };
 
 export const FAILURES: Record<FailureKind, { trigger: string; label: string }> = {
-  courier_rejected: { trigger: 'courier_rejected_route', label: 'Courier rejects the route' },
-  order_not_created: { trigger: 'order_webhook_dropped', label: 'Payment captured, order webhook dropped' },
+  transfer_not_credited: { trigger: transferPlaybook.trigger, label: transferPlaybook.failure },
+  bill_token_missing: { trigger: billTokenPlaybook.trigger, label: billTokenPlaybook.failure },
 };
 
 const OPEN: Incident['status'][] = ['investigating', 'planning', 'awaiting_approval', 'executing'];
 
 export class AcrEngine {
-  private readonly systems: BusinessSystems;
+  private readonly systems: BankSystems;
   private readonly clock = new SimClock(DEMO_START);
   private readonly tools: ToolLayer;
   private readonly journeys: Journey[];
@@ -74,10 +75,7 @@ export class AcrEngine {
   availableTriggers(journeyId: string): FailureKind[] {
     const journey = this.journeys.find((j) => j.id === journeyId);
     if (!journey || this.incidents.some((i) => i.journeyId === journeyId && OPEN.includes(i.status))) return [];
-    const order = this.systems.findOrder(journey.orderId);
-    if (order?.status === 'courier_assigned') return ['courier_rejected'];
-    if (!order && journey.currentState === 'checkout') return ['order_not_created'];
-    return [];
+    return Object.values(PLAYBOOKS).filter((p) => p.canTrigger(journey)).map((p) => p.kind);
   }
 
   // ── Detect ────────────────────────────────────────────────────────────────
@@ -85,31 +83,13 @@ export class AcrEngine {
   trigger(journeyId: string, kind: FailureKind): Incident | null {
     if (!this.availableTriggers(journeyId).includes(kind)) throw new Error(`Cannot simulate ${kind} on ${journeyId} right now.`);
     const journey = this.journey(journeyId);
-    const customer = this.systems.getCustomer(journey.customerId);
-    let risk: RiskAssessment | null;
-    let received: [string, string];
-
-    if (kind === 'courier_rejected') {
-      this.clock.advance(60);
-      const courier = this.systems.rejectRoute(journey.orderId);
-      const event = this.addEvent(journey, 'courier_rejected_route', `${courier.name} rejected the route`, {
-        courierId: courier.id,
-        reason: 'route exceeds courier capacity',
-      });
-      journey.currentState = 'courier_rejected';
-      risk = assessDeliveryRisk(journey, this.systems.getOrder(journey.orderId), customer, event);
-      received = [`Event received: courier_rejected_route on ${journey.orderId}`, `${courier.name} · route exceeds courier capacity`];
-    } else {
-      const paidAt = this.clock.advance(60);
-      const payment = this.systems.capturePayment(journey.orderId, paidAt, true);
-      this.addEvent(journey, 'payment_captured', `Payment captured: ${formatNgn(payment.amount)}`, { reference: payment.reference });
-      journey.currentState = 'paid_awaiting_order';
-      // The order watchdog sweeps 10 minutes later.
-      this.clock.advance(10 * 60);
-      this.addEvent(journey, 'order_creation_overdue', 'Watchdog: no order 10 min after payment', { reference: payment.reference });
-      risk = assessOrderSyncRisk(customer, paidAt, this.clock.now(), this.systems.findOrder(journey.orderId) !== null);
-      received = [`Watchdog: payment ${payment.reference} has no order`, `${formatNgn(payment.amount)} captured at checkout ${journey.orderId}`];
-    }
+    const { received, risk } = PLAYBOOKS[kind].simulate({
+      journey,
+      customer: this.systems.getCustomer(journey.customerId),
+      systems: this.systems,
+      clock: this.clock,
+      addEvent: (type, summary, payload = {}) => void this.addEvent(journey, type, summary, payload),
+    });
 
     if (!risk) {
       journey.healthScore = 70;
@@ -141,11 +121,6 @@ export class AcrEngine {
     return incident;
   }
 
-  /** Shorthand for the PRD demo trigger. */
-  triggerCourierRejection(journeyId: string): Incident | null {
-    return this.trigger(journeyId, 'courier_rejected');
-  }
-
   // ── Investigate, plan, decide ───────────────────────────────────────────────
   /** Gathers evidence through read-only tools and proposes options. Returns the planner's briefing. */
   investigate(incidentId: string): AgentBriefing {
@@ -172,9 +147,9 @@ export class AcrEngine {
       failureType: PLAYBOOKS[incident.kind].failure,
       situation: inv.situation,
       promise: inv.promise,
-      orderId: journey.orderId,
-      item: journey.title,
-      customer: { name: inv.customer.name, tier: inv.customer.tier, previousDelays: inv.customer.history.previousDelays },
+      reference: journey.transactionId,
+      activity: journey.title,
+      customer: { name: inv.customer.name, tier: inv.customer.tier, pastFailedTransactions: inv.customer.history.failedTransactions },
       signals: incident.signals,
       evidence: this.trace.filter((t) => t.incidentId === id && t.phase === 'investigate').map((t) => (t.detail ? `${t.title}: ${t.detail}` : t.title)),
       rootCause: incident.cause,
@@ -264,7 +239,7 @@ export class AcrEngine {
     for (const e of result.events) this.addEvent(journey, e.type, e.summary, e.payload);
     journey.currentState = result.journeyState;
 
-    const sent = this.tools.write(incidentId, 'send_notification', { customerId: investigation.customer.id, body: result.notification }, auth) as Notification;
+    const sent = this.tools.write(incidentId, 'send_notification', { customerId: investigation.customer.id, ...result.notification }, auth) as Notification;
     this.addEvent(journey, 'customer_notified', `Customer informed via ${sent.channel.toUpperCase()}`, { notificationId: sent.id });
     this.step(incident, 'notify', 'ok', `Customer notified via ${sent.channel.toUpperCase()}`, sent.to);
 
@@ -299,7 +274,9 @@ export class AcrEngine {
       notifications: this.systems.outbox,
       recoveries: this.recoveries,
       tickets: this.systems.tickets,
-      couriers: [...this.systems.couriers.values()],
+      customers: [...this.systems.customers.values()],
+      accounts: [...this.systems.accounts.values()],
+      transactions: [...this.systems.transactions.values()],
     });
   }
 

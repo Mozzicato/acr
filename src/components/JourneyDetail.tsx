@@ -4,10 +4,10 @@ import { formatDateTime, formatTime } from '../format';
 import { HealthBadge, Panel, StatusBadge } from './ui';
 
 const DOT: Record<string, string> = {
-  payment_confirmed: 'ok', order_accepted: 'ok', courier_assigned: 'ok', parcel_collected: 'ok',
-  courier_rejected_route: 'fail', incident_opened: 'warn',
-  payment_captured: 'ok', order_creation_overdue: 'fail',
-  courier_reassigned: 'agent', order_recreated: 'agent', customer_notified: 'agent', escalated_to_human: 'warn',
+  nip_transfer_completed: 'ok', card_completed: 'ok', inflow_completed: 'ok', bill_payment_completed: 'ok',
+  transfer_submitted: 'ok', account_debited: 'warn', bill_paid: 'ok',
+  vend_timeout: 'fail', credit_overdue: 'fail', token_overdue: 'fail', incident_opened: 'warn',
+  transfer_reversed: 'agent', token_redelivered: 'agent', customer_notified: 'agent', escalated_to_human: 'warn',
 };
 
 export function JourneyPanel({ journey }: { journey: Journey }) {
@@ -17,7 +17,7 @@ export function JourneyPanel({ journey }: { journey: Journey }) {
         <dl className="facts">
           <div><dt>Objective</dt><dd>{journey.objective}</dd></div>
           <div><dt>Current state</dt><dd className="mono">{journey.currentState}</dd></div>
-          <div><dt>Promised by</dt><dd>{formatDateTime(journey.deadline)}</dd></div>
+          <div><dt>Deadline</dt><dd>{formatDateTime(journey.deadline)}</dd></div>
           <div><dt>Health score</dt><dd className="mono">{journey.healthScore}/100</dd></div>
         </dl>
         <ol className="timeline" aria-label="Journey events">

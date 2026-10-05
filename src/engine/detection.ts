@@ -1,13 +1,7 @@
-// Deterministic delivery-risk rules (PRD §9: no ML prediction in the MVP).
+// Deterministic risk rules (PRD §9: no ML prediction in the MVP). Each one watches for a debit
+// that hasn't produced what the customer paid for within a time window.
 
-import type { Customer, Journey, JourneyEvent, Order, Severity } from './types';
-
-export const DETECTION_RULE = {
-  id: 'DR-DELIVERY-01',
-  description: 'Courier rejected route + delivery deadline within 36h + no replacement courier assigned',
-  deadlineWindowHours: 36,
-  criticalWithinHours: 6,
-};
+import type { Customer, Severity } from './types';
 
 export interface RiskAssessment {
   rule: string;
@@ -17,64 +11,54 @@ export interface RiskAssessment {
   signals: string[];
 }
 
-export const hoursBetween = (from: string, to: string): number => (Date.parse(to) - Date.parse(from)) / 3_600_000;
+export const minutesBetween = (from: string, to: string): number => (Date.parse(to) - Date.parse(from)) / 60_000;
 
-/** Returns a risk assessment when the event puts the journey at risk, otherwise null. */
-export function assessDeliveryRisk(
-  journey: Journey,
-  order: Order,
-  customer: Customer,
-  event: JourneyEvent,
-): RiskAssessment | null {
-  if (event.type !== 'courier_rejected_route') return null;
-  if (order.courierId !== null) return null;
-  const hoursLeft = hoursBetween(event.at, journey.deadline);
-  if (hoursLeft > DETECTION_RULE.deadlineWindowHours) return null;
-
-  const signals = [
-    `Courier rejected route (${String(event.payload.reason ?? 'no reason given')})`,
-    `Promised delivery in ${hoursLeft.toFixed(1)}h`,
-    'No replacement courier assigned',
-  ];
-  let risk = 73;
-  if (customer.tier === 'priority') {
-    risk += 8;
-    signals.push('Priority customer');
-  }
-  if (customer.history.previousDelays > 0) {
-    risk += customer.history.previousDelays * 5;
-    signals.push(`${customer.history.previousDelays} previous delayed deliveries`);
-  }
-  if (hoursLeft < 12) risk += 10;
-  risk = Math.min(99, risk);
-
-  const severity: Severity = hoursLeft <= DETECTION_RULE.criticalWithinHours || risk >= 95 ? 'critical' : 'high';
-  return { rule: DETECTION_RULE.id, ruleDescription: DETECTION_RULE.description, severity, risk, signals };
-}
-
-export const ORDER_SYNC_RULE = {
-  id: 'DR-ORDER-01',
-  description: 'Payment captured + no order created within 10 minutes',
-  overdueMinutes: 10,
+export const TRANSFER_RULE = {
+  id: 'DR-TRANSFER-01',
+  description: 'Customer debited + NIP transfer not confirmed successful within 10 minutes',
+  windowMinutes: 10,
 };
 
-/** Fires when a customer has been charged but the order system has no order for the payment. */
-export function assessOrderSyncRisk(
-  customer: Customer,
-  paymentAt: string,
-  now: string,
-  orderExists: boolean,
-): RiskAssessment | null {
-  const minutes = hoursBetween(paymentAt, now) * 60;
-  if (orderExists || minutes < ORDER_SYNC_RULE.overdueMinutes) return null;
+export const BILL_RULE = {
+  id: 'DR-BILL-01',
+  description: 'Customer debited + no token delivered within 5 minutes',
+  windowMinutes: 5,
+};
 
-  const signals = ['Payment captured', `No order created after ${Math.round(minutes)} min`, 'No order confirmation sent to the customer'];
-  let risk = 86;
-  if (customer.history.supportContacts > 0) {
-    risk += 6;
-    signals.push(`${customer.history.supportContacts} earlier contact about a missing order confirmation`);
+function customerSignals(customer: Customer, signals: string[]): number {
+  let added = 0;
+  if (customer.tier === 'premier') {
+    added += 6;
+    signals.push('Premier customer');
   }
-  if (customer.tier === 'priority') risk += 5;
+  if (customer.history.failedTransactions > 0) {
+    added += customer.history.failedTransactions * 4;
+    signals.push(`${customer.history.failedTransactions} earlier failed transfers`);
+  }
+  return added;
+}
+
+/** A transfer whose debit posted but which the switch hasn't confirmed as successful. */
+export function assessTransferRisk(
+  customer: Customer, amount: number, debitedAt: string, now: string, nipCode: string,
+): RiskAssessment | null {
+  const minutes = minutesBetween(debitedAt, now);
+  if (nipCode === '00' || minutes < TRANSFER_RULE.windowMinutes) return null;
+  const signals = [`₦${amount.toLocaleString('en-NG')} debited`, `NIP response ${nipCode}, not confirmed after ${Math.round(minutes)} min`, 'Customer can see the debit in the app'];
+  let risk = 80 + customerSignals(customer, signals);
+  if (amount >= 50_000) {
+    risk += 5;
+    signals.push('Amount ≥ ₦50,000');
+  }
   risk = Math.min(99, risk);
-  return { rule: ORDER_SYNC_RULE.id, ruleDescription: ORDER_SYNC_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
+  return { rule: TRANSFER_RULE.id, ruleDescription: TRANSFER_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
+}
+
+/** A prepaid token purchase that was debited but never delivered. */
+export function assessBillRisk(customer: Customer, amount: number, debitedAt: string, now: string, delivered: boolean): RiskAssessment | null {
+  const minutes = minutesBetween(debitedAt, now);
+  if (delivered || minutes < BILL_RULE.windowMinutes) return null;
+  const signals = [`₦${amount.toLocaleString('en-NG')} debited`, `No token after ${Math.round(minutes)} min`, 'Customer may have no electricity'];
+  const risk = Math.min(99, 84 + customerSignals(customer, signals));
+  return { rule: BILL_RULE.id, ruleDescription: BILL_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
 }

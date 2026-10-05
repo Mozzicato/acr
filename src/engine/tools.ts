@@ -1,31 +1,28 @@
-// Tool layer + permission layer (PRD §12). The agent never touches business systems directly:
+// Tool layer + permission layer (PRD §12). The agent never touches bank systems directly:
 // every call goes through here and produces an audit entry.
 
-import type { BusinessSystems, SimClock } from './systems';
+import type { BankSystems, SimClock } from './systems';
 import type { ActionId, Actor, AuditEntry, Notification, PolicyDecision } from './types';
 
 export const READ_TOOLS = [
   'get_customer',
-  'get_order',
-  'get_payment',
-  'get_inventory',
-  'get_delivery_status',
-  'find_couriers',
+  'get_account',
+  'get_transaction',
+  'nip_status_query',
+  'get_bank_status',
+  'biller_requery',
   'search_support_history',
-  'get_checkout',
-  'get_webhook_log',
-  'check_stock',
 ] as const;
-export const WRITE_TOOLS = ['reassign_delivery', 'replay_order_creation', 'send_notification'] as const;
-
-/** The recovery action each write tool carries out. send_notification follows any executed recovery. */
-const TOOL_ACTION: Record<Exclude<WriteTool, 'send_notification'>, ActionId> = {
-  reassign_delivery: 'reassign_courier',
-  replay_order_creation: 'recreate_order',
-};
+export const WRITE_TOOLS = ['post_reversal', 'deliver_token', 'send_notification'] as const;
 
 export type ReadTool = (typeof READ_TOOLS)[number];
 export type WriteTool = (typeof WRITE_TOOLS)[number];
+
+/** The recovery actions each write tool may carry out. send_notification follows any executed recovery. */
+const TOOL_ACTIONS: Record<Exclude<WriteTool, 'send_notification'>, ActionId[]> = {
+  post_reversal: ['reverse_transfer', 'reverse_bill_payment'],
+  deliver_token: ['redeliver_token'],
+};
 
 /** A policy decision plus who cleared it for execution. */
 export interface Authorization {
@@ -42,7 +39,7 @@ export class ToolLayer {
   private seq = 0;
 
   constructor(
-    private readonly systems: BusinessSystems,
+    private readonly systems: BankSystems,
     private readonly clock: SimClock,
     readonly audit: AuditEntry[],
   ) {}
@@ -52,21 +49,11 @@ export class ToolLayer {
     return this.record(incidentId, tool, 'acr-agent', input, () => {
       switch (tool) {
         case 'get_customer': return { ...s.getCustomer(input.customerId) };
-        case 'get_order': {
-          const order = s.findOrder(input.orderId);
-          return order ? { ...order } : null;
-        }
-        case 'get_payment': return { ...s.getPayment(input.orderId) };
-        case 'get_inventory': return { ...s.getInventory(input.orderId) };
-        case 'get_checkout': return { ...s.getCheckout(input.orderId) };
-        case 'get_webhook_log': return s.webhooks.filter((w) => w.orderId === input.orderId).map((w) => ({ ...w }));
-        case 'check_stock': return { sku: input.sku, onHand: s.stock.get(input.sku) ?? 0 };
-        case 'get_delivery_status': {
-          const order = s.getOrder(input.orderId);
-          const courier = order.courierId ? s.getCourier(order.courierId) : null;
-          return { orderId: order.id, status: order.status, courierId: order.courierId, courierAccepted: courier !== null, eta: order.eta, promisedBy: order.promisedBy };
-        }
-        case 'find_couriers': return s.couriersInZone(input.zone as never).map((c) => ({ ...c }));
+        case 'get_account': return { ...s.getAccount(input.accountNumber) };
+        case 'get_transaction': return structuredClone(s.getTransaction(input.transactionId));
+        case 'nip_status_query': return s.statusQuery(input.transactionId);
+        case 'get_bank_status': return { bank: input.bank, status: s.bankStatus.get(input.bank) ?? 'up' };
+        case 'biller_requery': return s.billerRequery(input.transactionId);
         case 'search_support_history': return s.searchSupportHistory(input.customerId);
       }
     });
@@ -78,10 +65,10 @@ export class ToolLayer {
       this.authorize(incidentId, tool, input, auth);
       const s = this.systems;
       switch (tool) {
-        case 'reassign_delivery':
-          return s.assignCourier(input.orderId, input.courierId, this.clock.now());
-        case 'replay_order_creation':
-          return s.createOrderFromCheckout(input.orderId, this.clock.now());
+        case 'post_reversal':
+          return s.postReversal(input.transactionId, this.clock.now());
+        case 'deliver_token':
+          return s.deliverToken(input.transactionId);
         case 'send_notification': {
           const customer = s.getCustomer(input.customerId);
           const channel = customer.preferences.channel;
@@ -90,7 +77,8 @@ export class ToolLayer {
             incidentId,
             customerId: customer.id,
             channel,
-            to: channel === 'sms' ? customer.phone : customer.email,
+            to: channel === 'email' ? customer.email : channel === 'sms' ? customer.phone : `${customer.name.split(' ')[0]}'s phone (in-app)`,
+            title: input.title,
             body: input.body,
             at: this.clock.now(),
           };
@@ -107,18 +95,15 @@ export class ToolLayer {
     const verdict = decision.selectedVerdict;
     if (decision.incidentId !== incidentId) throw new PermissionDenied('Authorization belongs to another incident.');
     const action = decision.selected.action;
-    const covered = tool === 'send_notification' ? action !== 'human_review' : TOOL_ACTION[tool] === action;
+    const covered = tool === 'send_notification' ? action !== 'human_review' : TOOL_ACTIONS[tool].includes(action);
     if (!verdict.allowed || !covered) {
       throw new PermissionDenied(`Policy ${verdict.policy} does not authorize ${tool}.`);
     }
     if (!verdict.autonomous && approvedBy !== 'operator') {
-      throw new PermissionDenied(`Level ${decision.level} requires operator approval.`);
+      throw new PermissionDenied(`Policy ${verdict.policy} requires operator approval.`);
     }
-    if (tool === 'reassign_delivery' && input.courierId !== decision.selected.courierId) {
-      throw new PermissionDenied('Courier differs from the one the policy authorized.');
-    }
-    if (tool === 'replay_order_creation' && input.orderId !== decision.selected.orderId) {
-      throw new PermissionDenied('Order differs from the one the policy authorized.');
+    if (tool !== 'send_notification' && input.transactionId !== decision.selected.transactionId) {
+      throw new PermissionDenied('Transaction differs from the one the policy authorized.');
     }
   }
 

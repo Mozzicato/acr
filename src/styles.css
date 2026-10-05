@@ -144,8 +144,8 @@ select {
 
 /* ── Grid ───────────────────────────────────────────────────────────────── */
 .grid { display: grid; gap: var(--space-4); grid-template-columns: 1fr; }
-@media (min-width: 900px) { .grid { grid-template-columns: 300px 1fr; } .col-trace { grid-column: 1 / -1; } }
-@media (min-width: 1320px) { .grid { grid-template-columns: 290px minmax(0, 1fr) 420px; } .col-trace { grid-column: auto; } }
+@media (min-width: 900px) { .grid { grid-template-columns: 350px minmax(0, 1fr); } .col-trace { grid-column: 1 / -1; } }
+@media (min-width: 1320px) { .grid { grid-template-columns: 350px minmax(0, 1fr) 400px; } .col-trace { grid-column: auto; } }
 .col { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
@@ -167,7 +167,7 @@ select {
 .badge-agent { background: var(--agent-soft); color: var(--agent); border-color: rgba(167, 139, 250, 0.3); }
 
 /* ── Journey list ───────────────────────────────────────────────────────── */
-.journeys { list-style: none; margin: 0; padding: var(--space-2); display: flex; flex-direction: column; gap: 2px; max-height: 640px; overflow-y: auto; }
+.journeys { list-style: none; margin: 0; padding: var(--space-2); display: flex; flex-direction: column; gap: 2px; max-height: 520px; overflow-y: auto; }
 .journey-btn {
   width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 2px var(--space-2); align-items: center;
   padding: 10px var(--space-3); border: 1px solid transparent; border-radius: 8px; background: transparent; text-align: left; cursor: pointer;
@@ -216,10 +216,50 @@ select {
 .options .reason { font-size: 12.5px; color: var(--text-muted); }
 .table-scroll { overflow-x: auto; }
 
-/* ── Notification ───────────────────────────────────────────────────────── */
-.phone { max-width: 380px; padding: var(--space-3); border-radius: 16px; background: var(--surface-2); border: 1px solid var(--border); }
-.phone-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: var(--space-2); }
-.bubble { padding: var(--space-3); border-radius: 14px 14px 14px 4px; background: var(--surface-3); font-size: 14px; animation: rise 300ms var(--ease) both; }
+/* ── Customer app (phone mock) ──────────────────────────────────────────── */
+.brand-for { font-weight: 500; color: var(--text-muted); font-size: 14px; }
+.phone-wrap { display: flex; justify-content: center; padding: var(--space-3); }
+.device {
+  width: 100%; max-width: 330px; display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3); border-radius: 30px;
+  background: #f4f6fb; color: #0f172a; border: 6px solid #020617; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 13.5px;
+}
+.device-bar { display: flex; justify-content: space-between; font-size: 11.5px; font-weight: 600; color: #334155; padding: 0 var(--space-2); }
+.app-greeting { font-weight: 600; font-size: 15px; padding: 0 2px; }
+.balance-card { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); border-radius: 14px; background: linear-gradient(135deg, #0f3d2e, #14532d); color: #ecfdf5; }
+.balance-card span { font-size: 11.5px; color: #a7f3d0; }
+.balance-card strong { font-size: 22px; font-weight: 600; transition: color 300ms var(--ease); }
+.balance-card .dim { color: #86efac; }
+.app-alert { padding: 10px var(--space-3); border-radius: 12px; background: #ecfdf5; border: 1px solid #86efac; animation: rise 300ms var(--ease) both; }
+.app-alert-head { display: flex; align-items: center; gap: 6px; font-weight: 600; color: #14532d; }
+.app-alert-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11.5px; color: #166534; }
+.app-section { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #475569; padding: 4px 2px 0; }
+.app-tx { list-style: none; margin: 0; padding: 0 var(--space-3); border-radius: 12px; background: #fff; }
+.app-tx li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
+.app-tx li:last-child { border-bottom: 0; }
+.app-tx li > .mono { white-space: nowrap; }
+.app-tx .credit { color: #15803d; }
+.app-tx-name { font-weight: 500; font-size: 13px; }
+.app-tx-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #64748b; }
+.app-chip { padding: 0 6px; border-radius: 99px; font-size: 10.5px; font-weight: 600; }
+.chip-pending { background: #fef3c7; color: #92400e; }
+.chip-failed { background: #fee2e2; color: #991b1b; }
+.chip-reversed, .chip-successful { background: #dcfce7; color: #166534; }
+.app-support-head { display: flex; justify-content: space-between; align-items: center; }
+.app-support-head > span { display: inline-flex; align-items: center; gap: 4px; }
+.app-know { text-transform: none; letter-spacing: 0; font-weight: 500; color: #166534; }
+.app-chat { display: flex; flex-direction: column; gap: 6px; max-height: 260px; min-height: 90px; overflow-y: auto; padding: var(--space-2); border-radius: 12px; background: #fff; }
+.app-chat-empty { margin: 0; font-size: 12.5px; color: #64748b; }
+.chat-msg { margin: 0; max-width: 88%; padding: 8px 10px; font-size: 13px; line-height: 1.45; animation: rise 250ms var(--ease) both; }
+.chat-msg.assistant { align-self: flex-start; background: #eef2ff; color: #1e1b4b; border-radius: 12px 12px 12px 4px; }
+.chat-msg.customer { align-self: flex-end; background: #14532d; color: #f0fdf4; border-radius: 12px 12px 4px 12px; }
+.chat-msg.typing { display: inline-flex; align-items: center; gap: 6px; color: #4338ca; }
+.app-input { display: flex; gap: 6px; }
+.app-input input { flex: 1; min-width: 0; min-height: 40px; padding: 0 12px; border-radius: 99px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; font: inherit; font-size: 13.5px; }
+.app-input input:focus-visible { outline: 2px solid #14532d; outline-offset: 1px; }
+.app-input button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: #14532d; color: #fff; cursor: pointer; }
+.app-input button:disabled { opacity: 0.4; cursor: not-allowed; }
 .outcome-row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 
 /* ── Agent trace ────────────────────────────────────────────────────────── */
