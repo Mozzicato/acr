@@ -1,15 +1,15 @@
-Absolutely. For the **Autonomous Customer Recovery (ACR)** idea, I’d frame it as an **agentic CX infrastructure**, not another chatbot.
-
 # ACR — Autonomous Customer Recovery
 
 ### One-line product definition
 
-> **ACR detects when a customer journey is about to fail, identifies the root cause, takes corrective action across business systems, and recovers the customer—often before they even complain.**
+> **ACR detects when a bank customer's transaction has gone wrong, identifies the root cause, takes authorized corrective action across the bank's systems, and tells the customer in their app, before they have to call.**
 
 The key shift is:
 
-**Traditional CX:** Customer complains → company responds.
-**ACR:** System detects failure → agent investigates → system fixes it → customer is informed.
+**Traditional customer care:** Customer complains → bank investigates → bank responds.
+**ACR:** System detects failure → agent investigates → policy authorizes → system fixes it → customer is informed.
+
+ACR is **agentic customer-care infrastructure**, not another chatbot. It plugs into the bank's systems and lives inside the bank's mobile app.
 
 ---
 
@@ -19,44 +19,44 @@ The key shift is:
 
 **Product:** ACR
 **Full name:** Autonomous Customer Recovery
-**Category:** Agentic AI / Customer Experience Infrastructure
-**Primary users:** Businesses with high-volume customer journeys — fintechs, e-commerce, logistics, telecoms, airlines, utilities, etc.
+**Category:** Agentic AI / Customer Experience Infrastructure for banks
+**Primary users:** Retail banks and their customers. First deployment target: the bank's mobile app (built as a prototype for the Ecobank hackathon).
 
 ### Problem
 
-Most customer-support systems are **reactive**.
+Most bank customer care is **reactive**.
 
 A customer:
 
-1. Makes a payment.
-2. Something goes wrong.
-3. Waits.
-4. Contacts support.
-5. Explains what happened.
-6. Support investigates.
-7. Support contacts another department.
-8. Customer waits again.
-9. Eventually the company resolves the issue.
+1. Sends a transfer.
+2. Their account is debited.
+3. The money never arrives.
+4. They wait, then call or visit a branch.
+5. They explain what happened.
+6. Support logs a complaint and investigates.
+7. Support contacts another bank or the switch.
+8. The customer waits again, often days.
+9. Eventually the money is reversed.
 
-The company usually has the signals needed to detect the problem **before the customer complains**, but those signals are scattered across different systems.
+The bank already has the signals needed to spot the problem **before the customer complains**: the debit, the interbank (NIP) response code, the other bank's status. They just sit in different systems.
 
 For example:
 
 ```text
-Payment succeeded
+Customer sends ₦85,000 to another bank
         ↓
-Order created
+Account debited
         ↓
-Warehouse hasn't processed order
+NIP returns 91: beneficiary bank not available
         ↓
-Expected delivery window approaching
+Money is still with us, but the customer sees it as gone
         ↓
-Customer is likely to miss promised delivery
+Customer is about to call support
 ```
 
 A traditional system waits for:
 
-> "Where is my order???"
+> "I was debited but the money didn't get there!!!"
 
 ACR acts before that happens.
 
@@ -64,17 +64,17 @@ ACR acts before that happens.
 
 # 2. Vision
 
-Build an autonomous layer between a company's operational systems and its customers that continuously asks:
+Build an autonomous layer between a bank's operational systems and its customers that continuously asks:
 
-> **"Is this customer journey going wrong, and what can I do about it?"**
+> **"Is this customer's transaction going wrong, and what can I safely do about it?"**
 
-The system should eventually move from:
+The system should move from:
 
 **Detect → Notify**
 
 to:
 
-**Detect → Diagnose → Decide → Act → Recover → Learn**
+**Detect → Diagnose → Decide → Act → Verify → Recover → Learn**
 
 ---
 
@@ -84,14 +84,15 @@ to:
 
 ACR should:
 
-* Detect customer journey failures.
-* Predict failures before they become complaints.
+* Detect failed or stuck transactions.
+* Catch them before they become complaints.
 * Identify the likely root cause.
 * Determine the appropriate recovery action.
 * Execute authorized actions automatically.
-* Communicate with the customer.
-* Escalate when human intervention is required.
-* Learn from successful/failed recoveries.
+* Communicate with the customer in their app.
+* Answer the customer's questions with full knowledge of what happened.
+* Escalate when human judgment is required.
+* Learn from successful and failed recoveries.
 
 ### Success metric
 
@@ -99,7 +100,7 @@ The primary metric isn't chatbot response time.
 
 It's:
 
-> **Customer problems resolved without the customer having to ask.**
+> **Customer problems resolved without the customer having to ask, and never at the cost of paying anyone twice.**
 
 ---
 
@@ -113,50 +114,56 @@ ACR is **not**:
 * A ticketing system.
 * A CRM.
 * A replacement for every human support agent.
+* A core banking system or a payment switch.
 
-The AI agent sits **on top of existing business infrastructure** and orchestrates recovery.
+The AI agent sits **on top of existing banking infrastructure** and orchestrates recovery.
 
 ---
 
 # 5. Target Users
 
-## Business
+## Bank
 
 Initial target:
 
-### E-commerce
+### Retail banking: failed transfers and bill payments
 
-Because the journey is easy to demonstrate.
+Because "debited but not credited" is the complaint every bank customer knows, and the fix is well defined.
 
 Example:
 
 ```text
-Customer orders product
+Customer sends money to another bank
         ↓
-Payment succeeds
+Account debited
         ↓
-Order accepted
+Other bank is down, NIP returns a final failure
         ↓
-Expected delivery: Oct 5
+ACR detects the stuck debit
         ↓
-Courier hasn't picked up by Oct 4
+ACR queries NIP and the other bank's status
         ↓
-ACR detects risk
+Confirms the money never left
         ↓
-ACR contacts logistics system
+Reverses the debit
         ↓
-Finds courier failure
+Verifies the balance is restored
         ↓
-Reassigns delivery
-        ↓
-Updates customer
+Tells the customer in the app
 ```
 
 The customer never needs to contact support.
 
+## Customer
+
+The bank's mobile app users. They see ACR in two places:
+
+* **Proactive messages:** "Your ₦85,000 is back", with a plain timeline of what happened.
+* **In-app support:** an assistant that already knows their account and what ACR did, so they never have to explain.
+
 ---
 
-# 6. Core Concept: Customer Journey Graph
+# 6. Core Concept: Customer Journey
 
 This is one of the most important technical/product concepts.
 
@@ -171,27 +178,23 @@ For example:
 ```text
 Customer
    │
-   ├── Order
-   │     ├── Payment
-   │     ├── Inventory
-   │     ├── Fulfillment
-   │     ├── Delivery
-   │     └── Support
+   ├── Account
+   │     ├── Transfer ──── NIP session ── Beneficiary bank
+   │     ├── Bill payment ── Biller vend ── Token
+   │     ├── Reversals
+   │     └── Notifications
    │
-   └── Previous interactions
+   └── Previous complaints
 ```
-
-ACR constructs a real-time **Customer Journey Graph**.
 
 Each journey has:
 
 * customer
 * transaction
-* product/service
-* expected outcome
+* what the customer expected
 * current state
-* deadlines
-* dependencies
+* deadline (detection window)
+* dependencies (switch, other bank, biller)
 * failures
 * previous interactions
 * recovery actions
@@ -201,44 +204,42 @@ Each journey has:
 # 7. Core Architecture
 
 ```text
-                 BUSINESS SYSTEMS
+                  BANK SYSTEMS
  ┌─────────────────────────────────────────┐
- │ Payments │ Orders │ CRM │ Logistics    │
- │ Inventory│ Tickets│ Database│ APIs     │
+ │ Core banking │ NIP switch │ Biller gateway│
+ │ CRM          │ Notifications              │
  └────────────────────┬────────────────────┘
                       │
                       ▼
              ┌─────────────────┐
-             │ EVENT INGESTION  │
-             └────────┬────────┘
-                      │
-                      ▼
-             ┌─────────────────┐
              │ JOURNEY ENGINE   │
-             │                 │
-             │ Customer State   │
-             │ Expected State   │
-             │ Journey Graph    │
+             │ Current state    │
+             │ Expected state   │
              └────────┬────────┘
                       │
                       ▼
              ┌─────────────────┐
-             │ FAILURE DETECTOR │
+             │ WATCHDOG         │  deterministic detection rules
              └────────┬────────┘
                       │
                       ▼
              ┌─────────────────┐
-             │ DIAGNOSIS AGENT  │
+             │ PLAYBOOK         │  investigate through read-only tools
              └────────┬────────┘
                       │
                       ▼
              ┌─────────────────┐
-             │ RECOVERY AGENT   │
+             │ LLM PLANNER      │  ranks options it's given
+             └────────┬────────┘
+                      │
+                      ▼
+             ┌─────────────────┐
+             │ POLICY ENGINE    │  final authority
              └────────┬────────┘
                       │
              ┌────────┴─────────┐
              ▼                  ▼
-      Business APIs       Customer Channel
+      Bank systems         Mobile app
              │                  │
              ▼                  ▼
         TAKE ACTION       INFORM CUSTOMER
@@ -258,134 +259,129 @@ This is the heart of the product.
 
 ### Step 1 — Detect
 
-ACR receives events.
+A watchdog sweeps for debits that haven't produced what the customer paid for.
 
 ```json
 {
-  "customer": "C102",
-  "event": "delivery_delayed",
-  "order": "ORD293",
-  "expected_delivery": "2026-10-05",
-  "current_status": "warehouse"
+  "customer": "C201",
+  "transaction": "NIP2610040001",
+  "type": "nip_transfer",
+  "amount": 85000,
+  "beneficiary_bank": "Lagoon Bank",
+  "nip_response": "91",
+  "debited_at": "2026-10-04T13:00:00+01:00"
 }
 ```
 
 ---
 
-### Step 2 — Predict
+### Step 2 — Assess risk
 
 The system asks:
 
-> Is this merely a delay, or is this likely to become a customer-impacting failure?
+> Is this a blip, or a customer about to complain?
 
 For example:
 
 ```text
-Delivery delay: +6 hours
-Customer importance: high
-Previous delays: 2
-Promised deadline: tomorrow
-Courier capacity: 94%
+Debit posted, not confirmed after: 10 min
+NIP response: 91
+Amount: ≥ ₦50,000
+Customer tier: premier
+Earlier failed transfers: 2
 
-Risk = HIGH
+Risk = CRITICAL (99%)
 ```
+
+Detection is **rule-based** (`DR-TRANSFER-01`, `DR-BILL-01`), not a trained model.
 
 ---
 
 ### Step 3 — Diagnose
 
-The diagnosis agent investigates.
-
-It may query:
+The playbook investigates through read-only tools:
 
 ```text
-Order API
+get_transaction
 ↓
-Inventory API
+get_account
 ↓
-Courier API
+nip_status_query
 ↓
-Payment API
+get_bank_status
 ↓
-CRM
+get_customer + search_support_history
 ```
 
-And determine:
+And determines:
 
-> Courier failed to accept the delivery because the assigned route exceeded capacity.
+> Lagoon Bank was down, so NIP rejected the transfer (code 91) after the debit posted. The money is still with us, but the customer's balance shows it as gone.
 
 ---
 
 ### Step 4 — Plan
 
-The agent generates possible recovery plans:
+The agent proposes options:
 
 ```text
-Plan A:
-Reassign courier.
-
-Plan B:
-Delay delivery and offer ₦2,000 credit.
-
-Plan C:
-Refund customer.
+Option A: Reverse ₦85,000 to the customer.
+Option B: Resend when Lagoon Bank recovers.
+Option C: Add a ₦1,000 goodwill credit.
+Option D: Escalate to a human agent.
 ```
 
-The system evaluates:
-
-* cost
-* customer impact
-* business policy
-* probability of success
-* authorization level
+The LLM ranks them using the evidence. It can only choose among these options.
 
 ---
 
-### Step 5 — Act
+### Step 5 — Decide
 
-ACR executes the permitted action.
-
-Example:
+The **policy engine** checks the facts itself, from the systems of record, and decides:
 
 ```text
-Reassign courier
-       ↓
-Update order
-       ↓
-Update customer
+Reverse          → PERMITTED  (NIP failure is final, not reversed yet)
+Resend           → BLOCKED    (resending money needs the customer's say-so)
+Goodwill credit  → BLOCKED    (moves the bank's money, Level 3)
+Escalate         → PERMITTED  (always)
+```
+
+If the LLM picks a blocked option, policy overrides it, and the trace says so.
+
+---
+
+### Step 6 — Act
+
+```text
+post_reversal(NIP2610040001)
 ```
 
 ---
 
-### Step 6 — Verify
+### Step 7 — Verify
 
-This is critical.
-
-ACR shouldn't assume the action worked.
-
-It checks:
+This is critical. ACR doesn't assume the action worked.
 
 ```text
-Courier accepted?
+Transfer marked reversed?
        ↓
 YES
        ↓
-Delivery ETA updated?
+Balance back to ₦497,300?
        ↓
 YES
        ↓
-Customer notified
+Notify the customer
 ```
 
 ---
 
-### Step 7 — Recover
+### Step 8 — Recover
 
-The customer receives something like:
+The customer's app shows:
 
-> "Your order was at risk of being delayed because your original courier could not accept the route. We've reassigned it to another courier and your delivery is still expected tomorrow."
+> "Your ₦85,000 is back. Your transfer to Tunde Adeyemi (Lagoon Bank) didn't go through because Lagoon Bank was unavailable. We've returned the full amount. You can send it again once Lagoon Bank is back. You don't need to contact us."
 
-No ticket.
+No complaint.
 
 No phone call.
 
@@ -393,28 +389,17 @@ No waiting.
 
 ---
 
-### Step 8 — Learn
+### Step 9 — Learn
 
 ACR records:
 
 ```text
-Failure:
-Courier capacity
-
-Action:
-Reassignment
-
-Outcome:
-Successful
-
-Cost:
-₦0
-
-Customer complaint avoided:
-YES
+Failure:            Transfer debited, not credited
+Action:             reverse_transfer
+Outcome:            Successful
+Cost to bank:       ₦0
+Complaint avoided:  YES
 ```
-
-This creates an increasingly intelligent recovery system.
 
 ---
 
@@ -422,54 +407,37 @@ This creates an increasingly intelligent recovery system.
 
 For a hackathon, **do NOT build the entire platform**.
 
-Build one extremely convincing vertical slice.
+Build a vertical slice convincing enough that people can use it themselves.
 
 ## MVP boundary
 
-The MVP is a **simulated e-commerce delivery recovery system**. It proves that ACR can detect a known operational failure, gather evidence from connected systems, choose a policy-permitted action, execute it, and verify the result.
+The MVP is a **working prototype of ACR inside a bank's mobile app**, with simulated bank systems behind real APIs.
 
-For the MVP:
+In the MVP:
 
-* Events, business systems, and customer communications may be mocked.
-* Failure detection is deterministic, using explicit delivery-risk rules rather than a trained prediction model.
+* Core banking, the NIP switch and the biller are simulators. The agent, policy engine, safety checks and audit trail are real.
+* Detection is deterministic, using explicit time-window rules.
 * Recovery policy and authorization are deterministic and auditable.
-* The AI agent may summarize evidence and select among policy-permitted options, but it cannot invent actions, bypass policy, or call business systems directly.
-* Learning is represented by recording recovery outcomes; model training is out of scope.
+* The LLM may summarize evidence and choose among policy-permitted options. It cannot invent actions, bypass policy, or call bank systems directly.
+* Learning is represented by recording recovery outcomes. Model training is out of scope.
+* Reversing a debit whose failure is **confirmed final** is in scope. It returns the customer's own money and costs the bank nothing. Credits, compensation and anything over ₦1,000,000 still need a human.
 
 Out of scope for the MVP:
 
-* Production integrations, multi-tenant onboarding, and real courier dispatch.
-* A generalized graph database or support-ticket platform.
-* Autonomous refunds, credits, account changes, or any financial action.
+* Real integrations with core banking, NIBSS or billers.
+* Multi-bank onboarding.
+* Goodwill credits, compensation, account changes.
 * ML-based failure prediction claims.
 
-## MVP use case
+## MVP use cases
 
-### E-commerce delivery recovery.
+1. **Transfer debited but not credited.** Final NIP failure → automatic reversal. "In progress" → never refund, since the money may still land; escalate to a human.
+2. **Electricity token paid for but not delivered.** Biller confirms the token was vended → deliver it in-app, and no money moves. Biller doesn't answer → escalate.
 
-Simulate:
+## Proof that it works
 
-```text
-Customer orders product
-        ↓
-Payment succeeds
-        ↓
-Order created
-        ↓
-Delivery assigned
-        ↓
-Courier failure
-        ↓
-ACR detects problem
-        ↓
-AI investigates
-        ↓
-AI decides recovery
-        ↓
-API action
-        ↓
-Customer automatically informed
-```
+* **Live:** anyone scans a QR code, opens the bank app on their own phone, and sends money. The presenter sets banks to Up, Down or Unstable, and ACR handles whatever happens in real time.
+* **At scale:** a seeded stress test runs thousands of random journeys with injected faults and checks ten safety invariants on every run, including in CI.
 
 ---
 
@@ -477,202 +445,182 @@ Customer automatically informed
 
 This is where the idea becomes powerful.
 
-### Normal customer journey
+### Normal
 
 ```text
-09:00
-Customer orders laptop.
-
-09:01
-Payment confirmed.
-
-09:03
-Order accepted.
-
-10:00
-Courier assigned.
+A judge scans the QR code and opens a demo account (₦500,000).
+They send ₦20,000 to Crest Bank.
+It arrives. ACR stays out of the way.
 ```
 
-Everything looks normal.
-
-Then:
+Then the presenter sets **Harbor Bank → Down**.
 
 ```text
-13:00
-Courier rejects route.
+13:07:21  Judge sends ₦75,000 to Harbor Bank.
+13:07:21  Account debited.
+13:07:21  "This didn't go through."
 ```
 
 Normally:
 
-> Nothing happens.
-
-Customer continues waiting.
+> The customer starts calling.
 
 ACR detects:
 
 ```text
-Courier rejected route
+Debit posted
 +
-Delivery deadline approaching
+NIP 91, not confirmed after 20 s
 +
-No replacement courier
+Customer can see the debit
 =
-HIGH FAILURE RISK
+HIGH RISK
 ```
 
-The agent investigates.
-
-It discovers:
+The agent investigates:
 
 ```text
-Courier A → unavailable
-Courier B → available
-Distance → acceptable
-Delivery SLA → maintained
+NIP status query → 91, final
+Harbor Bank      → down
+Reversal         → permitted by TRANSFER-REVERSAL-01
 ```
 
 ACR executes:
 
 ```text
-Reassign → Courier B
+Reverse ₦75,000 → verify balance → notify
 ```
 
-Then sends:
+About 20 seconds after the failure, the judge's phone shows:
 
-> "We've detected an issue with your original delivery assignment and automatically reassigned your order. Your delivery time is unchanged."
+> "Your ₦75,000 is back."
 
-Customer never contacts support.
+Then the presenter sets the bank to **Unstable** ("in progress"). This time ACR **refuses** to refund, because the money might still land, and hands the case to a human. That shows judgment, not just automation.
+
+The judge opens Help and asks: "Did Tunde get my money?" The assistant answers from their actual account.
+
+Detection windows are 20 s (transfers) and 15 s (bills) on stage. Production would use 10 and 5 minutes, which is what the stress test uses.
 
 ## MVP acceptance criteria
 
-The demo is complete when an operator can:
+The MVP is complete when:
 
-1. Trigger a `courier_rejected_route` event for an active order.
-2. See the journey move from healthy to at risk, with the rule and evidence that caused the incident.
-3. See an investigation trace retrieve the order, payment, inventory, and courier availability.
-4. See the recovery policy authorize reassignment only when an eligible alternate courier is available.
-5. Execute reassignment, verify courier acceptance and preserved ETA, and record the outcome.
-6. View the customer notification and a completed audit trail without creating a support ticket.
+1. A customer can open an account, transfer to another bank and buy a token from their own phone. ✅
+2. A failed debit moves the journey from healthy to at risk, with the rule and evidence shown. ✅
+3. The investigation trace shows the transaction, account, NIP status, bank status and customer history. ✅
+4. Policy authorizes a reversal only when the NIP failure is final, and never twice. ✅
+5. ACR executes, verifies the restored balance, notifies the customer in-app, and records the outcome, with no complaint ticket. ✅
+6. The support assistant answers from the customer's real account and cannot move money. ✅
+7. The stress test passes all safety invariants across thousands of random journeys. ✅
 
 ---
 
 # 11. Human-in-the-Loop
 
-ACR should **not** be allowed to autonomously do everything.
-
-Create an action policy.
+ACR should **not** be allowed to do everything on its own.
 
 ### Level 0 — Observe
 
-AI can only monitor.
+ACR detects and investigates, then recommends. It takes no action.
 
 ### Level 1 — Recommend
 
-AI proposes action.
-
-Human approves.
+ACR proposes the action. An operator approves or rejects it.
 
 ### Level 2 — Low-risk autonomous
 
-AI can execute predefined actions.
+ACR executes predefined actions on its own:
 
-Examples:
+* reverse a transfer whose NIP failure is final (up to ₦1,000,000)
+* deliver a token the biller confirms it vended
+* send the customer a notification
 
-* update delivery ETA
-* resend confirmation
-* reassign delivery
-* update ticket
-* send notification
+### Level 3 — High-risk (always human)
 
-### Level 3 — High-risk
-
-Human approval required.
-
-Examples:
-
-* large refunds
-* account suspension
-* financial compensation above threshold
-* contract changes
-
-This makes the system much more credible.
+* reversals over ₦1,000,000
+* goodwill credits and compensation
+* anything where the status is unclear ("in progress", biller not answering)
+* account changes
 
 ---
 
 # 12. Agent Tools
 
-The agent gets tools such as:
+The agent's tools:
 
 ```text
-get_customer()
-get_order()
-get_payment()
-get_delivery_status()
-get_inventory()
-search_support_history()
+Read
+  get_customer()
+  get_account()
+  get_transaction()
+  nip_status_query()
+  get_bank_status()
+  biller_requery()
+  search_support_history()
 
-reassign_delivery()
-update_order()
-issue_credit()
-send_notification()
-create_ticket()
-escalate_to_human()
+Write (need a policy decision)
+  post_reversal()
+  deliver_token()
+  send_notification()
 ```
 
-The LLM isn't directly connected to everything.
-
-Instead:
+The LLM isn't connected to any of them directly:
 
 ```text
 LLM
+ ↓
+Playbook
  ↓
 Tool layer
  ↓
 Permission layer
  ↓
-Business API
+Bank systems
 ```
 
-That is important for security.
-
-Every tool call must produce an auditable result containing the incident ID, input, output, timestamp, and actor. In the MVP, the tool layer exposes only read operations plus `reassign_delivery()` and `send_notification()`.
+Every tool call produces an audit record: incident ID, input, output, timestamp and actor. A write tool runs only with a policy decision for **that exact incident and transaction**.
 
 ---
 
 # 13. Recovery Policy Engine
 
-Don't let the LLM invent business decisions.
+Don't let the LLM make banking decisions.
 
-Use deterministic policies around the agent.
-
-Example:
+Use deterministic policies around the agent:
 
 ```yaml
-incident: delivery_delay
+TRANSFER-REVERSAL-01:
+  allow reverse_transfer when:
+    debit_posted
+    and nip_status is final (not "09 in progress")
+    and not already reversed
+  needs operator when amount > ₦1,000,000
 
-if:
-  delay_hours < 2:
-    action: monitor
+TRANSFER-RETRY-01:
+  never resend money without the customer's say-so
 
-if:
-  delay_hours >= 2
-  and alternative_courier_available:
-    action: reassign
+BILL-REDELIVER-01:
+  allow redeliver_token when biller confirms a vended token not yet delivered
 
-if:
-  customer_impact == severe:
-    action: human_review
+BILL-REVERSAL-01:
+  allow reverse_bill_payment only when biller confirms the vend failed
+
+FINANCIAL-HOLD-01:
+  goodwill credits need Level 3 human approval
+
+ESCALATE-01:
+  human_review is always permitted
 ```
 
 The AI handles:
 
-**reasoning + investigation + orchestration**
+**reasoning + investigation + explanation**
 
 The policy engine handles:
 
 **authorization + limits + safety**
 
-For the MVP, the policy engine is the final authority. A proposed action may be executed only if it matches a named policy, has the required input evidence, and is within the configured autonomy level.
+The policy engine is the final authority. An action runs only if it matches a named policy, its evidence holds in the systems of record, and the autonomy level permits it.
 
 ---
 
@@ -683,9 +631,32 @@ For the MVP, the policy engine is the final authority. A proposed action may be 
 ```text
 Customer
 ├── id
-├── preferences
-├── risk_profile
-└── history
+├── tier
+├── account_number
+├── preferences (channel)
+└── history (failed transactions, complaints)
+```
+
+### Account
+
+```text
+Account
+├── number
+├── customer_id
+├── balance
+└── status
+```
+
+### Transaction
+
+```text
+Transaction
+├── id
+├── type (nip_transfer, bill_payment, card, inflow, reversal)
+├── amount, direction
+├── status (pending, successful, failed, reversed)
+├── beneficiary | bill
+└── reverses (for a reversal)
 ```
 
 ### Journey
@@ -694,6 +665,7 @@ Customer
 Journey
 ├── id
 ├── customer_id
+├── transaction_id
 ├── objective
 ├── current_state
 ├── expected_state
@@ -718,9 +690,11 @@ Event
 Incident
 ├── id
 ├── journey_id
-├── severity
-├── cause
-├── confidence
+├── kind
+├── severity, risk
+├── rule + signals
+├── cause, confidence
+├── agent assessment
 ├── status
 └── resolution
 ```
@@ -739,152 +713,110 @@ Recovery
 
 ---
 
-# 15. Dashboard
+# 15. Operations Console
 
-The business dashboard should show:
+The bank's console shows:
 
-### Active journeys
-
-```text
-12,842
-```
-
-### Healthy
-
-```text
-11,927
-```
-
-### At risk
-
-```text
-741
-```
-
-### Critical
-
-```text
-174
-```
-
-And:
-
-```text
-                CUSTOMER JOURNEY HEALTH
-
-████████████████████████████████ 93%
-
-At-risk journeys
-┌────────────────────────────────────┐
-│ Order #1292                        │
-│ Delivery failure                   │
-│ Risk: 91%                          │
-│                                    │
-│ ACR: Investigating...              │
-└────────────────────────────────────┘
-```
+* **Be the customer:** a QR code to the mobile app.
+* **Network conditions:** each other bank Up / Down / Unstable; the biller Up / Token stuck / No answer.
+* **KPIs:** journeys, healthy, at risk, critical, with an agent, autonomous recovery rate, escalation rate, time to recovery, customer effort.
+* **The affected customer's app, live**, embedded next to the incident.
+* **Incident, recovery plan and policy decision, outcome, journey timeline.**
+* **Agent trace** and **audit trail.**
+* **Stress test** tab.
 
 ---
 
 # 16. Agent Trace
 
-For the demo, this is extremely important.
-
-Show:
+For the demo, this is extremely important:
 
 ```text
-🤖 ACR AGENT
+DETECT · INC-0001
+Watchdog: NIP2610060001 not confirmed after 20 s
+Rule DR-TRANSFER-01 fired: HIGH risk (85%)
 
-Detected:
-Courier failure
+INVESTIGATE
+✓ Debit posted
+✗ NIP status query: 91 Beneficiary bank not available (final)
+! Harbor Bank is down
+Root cause identified (96% confidence)
 
-↓
+PLAN
+Evaluating 4 recovery options
+Agent reasoning (gpt-oss-120b · 1.4s)
 
-Investigating order #1292
+DECIDE
+! TRANSFER-RETRY-01 blocked retry_transfer
+! FINANCIAL-HOLD-01 blocked goodwill_credit
+✓ ACTION APPROVED (TRANSFER-REVERSAL-01)
 
-✓ Payment confirmed
-✓ Inventory available
-✓ Courier unavailable
-✓ Alternative courier found
+ACT
+✓ ₦75,000 reversed
 
-↓
+VERIFY
+✓ Transfer marked reversed
+✓ Balance restored
 
-Evaluating recovery options
-
-Reassign courier:
-Probability of success: 94%
-Cost: ₦0
-Customer impact: Low
-
-↓
-
-ACTION APPROVED
-
-✓ Courier reassigned
-✓ ETA preserved
-✓ Customer notified
-
-↓
+NOTIFY
+✓ Customer notified in-app
 
 RECOVERY COMPLETE
 ```
 
-This makes the **agentic** component visible to judges.
+This makes the **agentic** part visible to judges.
 
 ---
 
 # 17. Tech Stack
 
-A hackathon-friendly implementation:
+What the prototype uses:
 
 ### Frontend
 
 ```text
-Next.js
-TypeScript
-Tailwind
-shadcn/ui
+React + TypeScript (Vite)
+Operations console  →  /
+Customer mobile app →  /app/
 ```
 
 ### Backend
 
 ```text
-FastAPI
-Python
+One API router on Web Request/Response
+Vercel function in production, Vite middleware in development
 ```
 
-Use SQLite for the demo and keep a clean repository boundary so PostgreSQL can replace it later without changing product behavior.
+### State
+
+```text
+Upstash Redis on Vercel (shared across serverless instances, with a lock)
+In-memory locally
+```
 
 ### Agent
 
 ```text
-LLM
-+
-tool calling
-+
-structured outputs
+Groq · openai/gpt-oss-120b
+structured outputs (strict JSON schema)
+the LLM ranks options; it never calls tools
 ```
 
-### Event system
-
-For MVP:
+### Bank systems (simulated)
 
 ```text
-In-process event simulation / SQLite
+Core banking
+NIP switch with transaction status query
+Biller gateway with requery
+CRM
+Notifications
 ```
 
-You don't need Kafka, Redis, or a message broker for a hackathon demo.
-
-### APIs
-
-Mock:
+### Testing
 
 ```text
-Payment API
-Order API
-Logistics API
-CRM API
-Notification API
+Vitest engine tests
+Seeded stress test with ten safety invariants (runs in CI and in the console)
 ```
 
 ---
@@ -893,15 +825,17 @@ Notification API
 
 **Don't build an AI that talks about problems.**
 
-Build an AI that **does things about problems.**
+Build an AI that **does things about problems, safely.**
 
 Bad:
 
-> "I'm sorry your order is delayed. Please contact support."
+> "We're sorry for the inconvenience. Your complaint has been logged. Reversals take 24 to 72 hours."
 
 Better:
 
-> "Your delivery is at risk. I've identified the failed courier, reassigned the order, preserved your delivery window, and notified you."
+> "Your transfer didn't go through because the other bank was down. We've already returned your ₦85,000. Your balance is ₦497,300."
+
+And just as important: knowing **when not to act**. If the switch says "in progress", the money may still land. Refunding would pay twice. ACR waits and hands it to a human.
 
 That's the difference between a chatbot and an **agent**.
 
@@ -909,35 +843,21 @@ That's the difference between a chatbot and an **agent**.
 
 # 19. Business Model
 
-ACR can be sold as infrastructure.
+ACR can be sold to banks as infrastructure.
 
 ### SaaS
 
 ```text
-Monthly platform fee
+Platform fee
 +
-usage / journey volume
+usage per 1,000 monitored transactions
 ```
 
-Potential pricing:
+The stronger proposition:
 
-```text
-Starter
-₦X / month
+> **Pay us based on complaints avoided and recoveries completed.**
 
-Growth
-₦X / month
-+ per 1,000 journeys
-
-Enterprise
-Custom
-```
-
-The stronger enterprise proposition is:
-
-> **Pay us based on recovered journeys / avoided support costs.**
-
-That aligns incentives.
+Each avoided complaint saves call-centre time, branch visits and dispute handling, and keeps a customer who might otherwise leave. That aligns incentives.
 
 ---
 
@@ -949,8 +869,8 @@ The strongest KPI is:
 
 $$
 ARR =
-\frac{Journeys\ recovered\ without\ customer\ complaint}
-{Total\ failed\ journeys}
+\frac{Failures\ recovered\ without\ customer\ complaint}
+{Total\ failed\ transactions}
 $$
 
 Other metrics:
@@ -959,8 +879,8 @@ Other metrics:
 
 $$
 CPR =
-\frac{Predicted\ failures\ resolved\ before\ complaint}
-{Total\ predicted\ failures}
+\frac{Failures\ resolved\ before\ complaint}
+{Total\ detected\ failures}
 $$
 
 ### Human Escalation Rate
@@ -977,6 +897,14 @@ $$
 MTTR = RecoveryTime - FailureDetectionTime
 $$
 
+### Double Payment Rate
+
+Must always be zero. Checked on every stress-test run.
+
+$$
+DPR = 0
+$$
+
 ### Customer Effort
 
 Number of customer actions required to resolve an incident.
@@ -991,23 +919,23 @@ $$
 
 # 21. The Killer Pitch
 
-> **Today, customer service starts when the customer complains.**
+> **Today, bank customer care starts when the customer complains.**
 >
-> **We're building ACR—the autonomous customer recovery layer that starts when the company realizes something is about to go wrong.**
+> **We're building ACR, the autonomous customer recovery layer that starts when the bank's own systems show something has gone wrong.**
 >
-> ACR watches customer journeys in real time, detects failures before customers experience them, investigates the root cause, and uses AI agents to take authorized corrective action across business systems.
+> ACR watches every transaction, catches failed and stuck debits before customers notice, investigates the cause, and takes action that policy authorizes. And it knows when *not* to act.
 >
 > Instead of:
 >
-> **Problem → Complaint → Ticket → Agent → Resolution**
+> **Debit → Complaint → Ticket → Investigation → Reversal days later**
 >
 > we create:
 >
-> **Problem → Detection → AI Recovery → Resolution.**
+> **Debit → Detection → Safe recovery → "Your money is back" in seconds.**
 >
 > We're not building another chatbot.
 >
-> **We're building customer service that doesn't wait for the customer.**
+> **We're building customer care that doesn't wait for the customer.**
 
 ### And the strongest closing line:
 
