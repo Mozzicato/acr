@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CHAT_CHARS, MAX_CHAT_MESSAGES, buildSupportMessages, fallbackSupportReply, parseAdvice, type AgentBriefing, type SupportContext } from './advisor';
+import { MAX_CHAT_CHARS, MAX_CHAT_MESSAGES, buildSupportMessages, fallbackSupportReply, parseAdvice, type AgentBriefing, type SupportContext } from './advisor.js';
 
 const briefing = {
   options: [{ action: 'reverse_transfer' }, { action: 'human_review' }],

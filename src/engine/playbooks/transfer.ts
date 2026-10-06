@@ -2,36 +2,27 @@
 // final failure, the money never left, so ACR returns it at once. If the status is still "in
 // progress", the money may yet land, so a reversal could pay twice and ACR must not act alone.
 
-import { formatNgn } from '../../format';
-import { assessTransferRisk } from '../detection';
-import { DEMO_TRANSFER } from '../seed';
-import type { NipStatus, SupportContact } from '../systems';
-import type { Account, Customer, RecoveryOption, Transaction } from '../types';
-import type { Playbook } from './types';
+import { formatNgn } from '../../format.js';
+import { assessTransferRisk, formatWindow, secondsBetween } from '../detection.js';
+import type { NipStatus, SupportContact } from '../systems.js';
+import type { Account, Customer, RecoveryOption, Transaction } from '../types.js';
+import type { Playbook } from './types.js';
 
 export const transferPlaybook: Playbook = {
   kind: 'transfer_not_credited',
   failure: 'Transfer debited, not credited',
-  trigger: 'nip_transfer_failed',
+  watches: 'debited_awaiting_credit',
+  window: 'transferSeconds',
 
-  canTrigger: (journey) => journey.currentState === 'composing_transfer',
-
-  simulate({ journey, customer, systems, clock, addEvent }) {
-    const { amount, beneficiary } = DEMO_TRANSFER;
-    const debitedAt = clock.advance(60);
-    const tx = systems.sendTransfer(customer.accountNumber, amount, beneficiary, debitedAt);
-    journey.transactionId = tx.id;
-    addEvent('transfer_submitted', `Sent ${formatNgn(amount)} to ${beneficiary.name} (${beneficiary.bank})`, { transactionId: tx.id });
-    addEvent('account_debited', `Debited ${formatNgn(amount)}. Balance ${formatNgn(systems.getAccount(customer.accountNumber).balance)}`, { transactionId: tx.id });
-    journey.currentState = 'debited_awaiting_credit';
-
-    // The transfer watchdog sweeps 10 minutes later.
-    clock.advance(10 * 60);
+  detect({ journey, customer, systems, now, windowSeconds }) {
+    const tx = systems.getTransaction(journey.transactionId);
     const nip = systems.statusQuery(tx.id);
-    addEvent('credit_overdue', 'Watchdog: transfer not confirmed 10 min after debit', { responseCode: nip.responseCode });
+    const risk = assessTransferRisk(customer, tx.amount, tx.at, now, nip.responseCode, windowSeconds);
+    if (!risk) return null;
+    const b = tx.beneficiary!;
     return {
-      received: [`Watchdog: ${tx.id} not confirmed after 10 min`, `${formatNgn(amount)} to ${beneficiary.bank} · NIP ${nip.responseCode} ${nip.message}`],
-      risk: assessTransferRisk(customer, amount, debitedAt, clock.now(), nip.responseCode),
+      received: [`Watchdog: ${tx.id} not confirmed after ${formatWindow(secondsBetween(tx.at, now))}`, `${formatNgn(tx.amount)} to ${b.bank} · NIP ${nip.responseCode} ${nip.message}`],
+      risk,
     };
   },
 

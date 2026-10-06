@@ -1,157 +1,213 @@
 import { describe, expect, it } from 'vitest';
-import { AcrEngine } from './agent';
-import { computeMetrics } from './metrics';
-import { BILL_JOURNEY_ID, DEMO_JOURNEY_ID, type Scenario } from './seed';
-import type { AutonomyLevel, FailureKind } from './types';
+import { AcrEngine } from './agent.js';
+import { computeMetrics } from './metrics.js';
+import { BILLER, DEMO_BILL, DEMO_CUSTOMERS, DEMO_TRANSFER } from './seed.js';
+import type { BankHealth, BillerHealth } from './systems.js';
+import type { AutonomyLevel } from './types.js';
 
-function run(scenario: Scenario = 'recoverable', level: AutonomyLevel = 2, journeyId = DEMO_JOURNEY_ID, kind: FailureKind = 'transfer_not_credited') {
-  const engine = new AcrEngine(scenario, level);
-  const incident = engine.trigger(journeyId, kind)!;
-  engine.investigate(incident.id);
-  engine.conclude(incident.id, null);
-  return { engine, id: incident.id };
+const ADAEZE = DEMO_CUSTOMERS.transfer;
+const BOLA = DEMO_CUSTOMERS.bill;
+
+function transfer(status: BankHealth, level: AutonomyLevel = 2, amount = DEMO_TRANSFER.amount) {
+  const engine = AcrEngine.create({ level });
+  engine.setBankStatus(DEMO_TRANSFER.bank, status);
+  const journey = engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, amount });
+  engine.advance(601);
+  const [incident] = engine.sweep();
+  if (incident) {
+    engine.investigate(incident.id);
+    engine.conclude(incident.id, null);
+  }
+  return { engine, journey, id: incident?.id };
 }
 
-const balanceOf = (engine: AcrEngine, customerId: string) => {
-  const state = engine.snapshot();
-  const customer = state.customers.find((c) => c.id === customerId)!;
-  return state.accounts.find((a) => a.number === customer.accountNumber)!.balance;
-};
+function bill(status: BillerHealth) {
+  const engine = AcrEngine.create();
+  engine.setBillerStatus(BILLER, status);
+  const journey = engine.startBillPayment(BOLA, DEMO_BILL);
+  engine.advance(301);
+  const [incident] = engine.sweep();
+  if (incident) {
+    engine.investigate(incident.id);
+    engine.conclude(incident.id, null);
+  }
+  return { engine, journey, id: incident?.id };
+}
 
-describe('transfer debited but not credited (MVP acceptance criteria)', () => {
-  it('detects the stuck debit with the rule and evidence', () => {
-    const engine = new AcrEngine();
-    expect(engine.snapshot().journeys.find((j) => j.id === DEMO_JOURNEY_ID)!.health).toBe('healthy');
-    const incident = engine.trigger(DEMO_JOURNEY_ID, 'transfer_not_credited')!;
-    const journey = engine.snapshot().journeys.find((j) => j.id === DEMO_JOURNEY_ID)!;
-    expect(journey.health).toBe('critical');
-    expect(incident).toMatchObject({ rule: 'DR-TRANSFER-01', kind: 'transfer_not_credited', risk: 99 });
-    expect(incident.signals).toContain('Premier customer');
-    expect(balanceOf(engine, 'C201')).toBe(497_300 - 85_000);
+const balanceOf = (engine: AcrEngine, customerId: string) =>
+  engine.systems.getAccount(engine.systems.getCustomer(customerId).accountNumber).balance;
+
+describe('normal operation', () => {
+  it('a transfer to a healthy bank completes and ACR leaves it alone', () => {
+    const { engine, journey, id } = transfer('up');
+    expect(id).toBeUndefined();
+    expect(journey.currentState).toBe('completed');
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300 - 85_000);
   });
 
-  it('investigates through the switch, the account and the beneficiary bank', () => {
-    const { engine } = run();
-    const tools = engine.snapshot().audit.map((a) => a.tool);
+  it('nothing is flagged before the detection window passes', () => {
+    const engine = AcrEngine.create();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'down');
+    engine.startTransfer(ADAEZE, DEMO_TRANSFER);
+    engine.advance(599);
+    expect(engine.sweep()).toHaveLength(0);
+    engine.advance(2);
+    expect(engine.sweep()).toHaveLength(1);
+  });
+
+  it('validates what the customer enters', () => {
+    const engine = AcrEngine.create();
+    expect(() => engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, account: '123' })).toThrow(/10 digits/);
+    expect(() => engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, amount: 10_000_000 })).toThrow(/Insufficient/);
+    expect(() => engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, bank: 'Real Bank' })).toThrow(/bank/);
+  });
+
+  it('a new customer can join with a starting balance', () => {
+    const engine = AcrEngine.create();
+    const c = engine.join('Ada<script>');
+    expect(c.name).toBe('Adascript');
+    expect(balanceOf(engine, c.id)).toBe(500_000);
+  });
+});
+
+describe('transfer debited but not credited', () => {
+  it('detects the stuck debit with the rule and evidence', () => {
+    const { engine } = transfer('down');
+    const incident = engine.world.incidents[0];
+    expect(incident).toMatchObject({ rule: 'DR-TRANSFER-01', kind: 'transfer_not_credited', risk: 99 });
+    expect(incident.signals).toContain('Premier customer');
+    const tools = engine.world.audit.map((a) => a.tool);
     expect(tools).toEqual(expect.arrayContaining(['get_transaction', 'get_account', 'nip_status_query', 'get_bank_status', 'get_customer']));
   });
 
   it('reverses on a final NIP failure, verifies the balance, notifies in-app, and opens no ticket', () => {
-    const { engine, id } = run();
-    engine.execute(id);
+    const { engine, id } = transfer('down');
+    engine.execute(id!);
     const state = engine.snapshot();
-    expect(state.decisions[id].selected.action).toBe('reverse_transfer');
+    expect(state.decisions[id!].selected.action).toBe('reverse_transfer');
     expect(state.incidents[0].status).toBe('resolved');
-    expect(balanceOf(engine, 'C201')).toBe(497_300);
-    expect(state.transactions.find((t) => t.reverses)?.amount).toBe(85_000);
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300);
     expect(state.trace.map((t) => t.title)).toEqual(expect.arrayContaining(['Transfer marked reversed', 'Balance restored', 'RECOVERY COMPLETE']));
     expect(state.notifications[0]).toMatchObject({ channel: 'push', title: 'Your ₦85,000 is back' });
     expect(state.recoveries[0]).toMatchObject({ outcome: 'successful', costNgn: 0, complaintAvoided: true, ticketsCreated: 0 });
-    for (const entry of state.audit) {
-      expect(entry).toMatchObject({ incidentId: id, at: expect.any(String), actor: expect.any(String) });
-    }
     expect(computeMetrics(state)).toMatchObject({ arr: 1, her: 0, customerEffort: 0 });
   });
 
   it('never reverses while the NIP status is still in progress', () => {
-    const { engine, id } = run('constrained');
-    const state = engine.snapshot();
-    const reversal = state.decisions[id].verdicts.find((v) => v.action === 'reverse_transfer')!;
+    const { engine, id } = transfer('unstable');
+    const reversal = engine.world.decisions[id!].verdicts.find((v) => v.action === 'reverse_transfer')!;
     expect(reversal.allowed).toBe(false);
     expect(reversal.reason).toMatch(/not final/);
-    expect(state.decisions[id].selected.action).toBe('human_review');
-    expect(state.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
-    expect(balanceOf(engine, 'C201')).toBe(497_300 - 85_000);
+    expect(engine.world.decisions[id!].selected.action).toBe('human_review');
+    expect(engine.world.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
   });
 
-  it('blocks retrying the transfer and goodwill credits', () => {
-    const { engine, id } = run();
-    const verdicts = engine.snapshot().decisions[id].verdicts;
-    expect(verdicts.find((v) => v.action === 'retry_transfer')).toMatchObject({ allowed: false });
-    expect(verdicts.find((v) => v.action === 'goodwill_credit')).toMatchObject({ allowed: false, policy: 'FINANCIAL-HOLD-01' });
+  it('holds reversals over ₦1m for an operator, even at Level 2', () => {
+    const engine = AcrEngine.create();
+    engine.systems.getAccount(engine.systems.getCustomer(ADAEZE).accountNumber).balance = 5_000_000;
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'down');
+    engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, amount: 1_500_000 });
+    engine.advance(601);
+    engine.runAutomatic('rules');
+    expect(engine.world.incidents[0].status).toBe('awaiting_approval');
+    expect(engine.world.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
   });
 });
 
 describe('electricity token paid but not delivered', () => {
   it('delivers the vended token without moving money', () => {
-    const { engine, id } = run('recoverable', 2, BILL_JOURNEY_ID, 'bill_token_missing');
-    const before = balanceOf(engine, 'C207');
-    engine.execute(id);
-    const state = engine.snapshot();
-    expect(state.incidents[0]).toMatchObject({ rule: 'DR-BILL-01', status: 'resolved' });
-    expect(state.decisions[id].selected.action).toBe('redeliver_token');
-    const reversal = state.decisions[id].verdicts.find((v) => v.action === 'reverse_bill_payment')!;
-    expect(reversal.reason).toMatch(/vended a token/);
-    expect(balanceOf(engine, 'C207')).toBe(before);
-    expect(state.notifications[0].body).toContain('4821-0937-5512-6603-1194');
+    const { engine, id } = bill('stuck');
+    const before = balanceOf(engine, BOLA);
+    engine.execute(id!);
+    const w = engine.world;
+    expect(w.incidents[0]).toMatchObject({ rule: 'DR-BILL-01', status: 'resolved' });
+    expect(w.decisions[id!].selected.action).toBe('redeliver_token');
+    expect(w.decisions[id!].verdicts.find((v) => v.action === 'reverse_bill_payment')!.reason).toMatch(/vended a token/);
+    expect(balanceOf(engine, BOLA)).toBe(before);
+    expect(w.bank.outbox[0].body).toMatch(/\d{4}-\d{4}-\d{4}-\d{4}-\d{4}/);
   });
 
-  it('escalates when the biller status is unknown', () => {
-    const { engine, id } = run('constrained', 2, BILL_JOURNEY_ID, 'bill_token_missing');
-    const state = engine.snapshot();
-    expect(state.decisions[id].selected.action).toBe('human_review');
-    expect(state.audit.some((a) => a.tool === 'deliver_token' || a.tool === 'post_reversal')).toBe(false);
+  it('escalates when the biller does not answer', () => {
+    const { engine, id } = bill('down');
+    expect(engine.world.decisions[id!].selected.action).toBe('human_review');
+    expect(engine.world.audit.some((a) => a.tool === 'deliver_token' || a.tool === 'post_reversal')).toBe(false);
   });
 });
 
 describe('autonomy levels', () => {
   it('Level 0 observes only', () => {
-    const { engine, id } = run('recoverable', 0);
-    expect(engine.snapshot().incidents[0].status).toBe('observing');
-    expect(() => engine.execute(id)).toThrow(/not ready/);
+    const { engine, id } = transfer('down', 0);
+    expect(engine.world.incidents[0].status).toBe('observing');
+    expect(() => engine.execute(id!)).toThrow(/not ready/);
   });
 
   it('Level 1 waits for an operator, then executes as the operator', () => {
-    const { engine, id } = run('recoverable', 1);
-    expect(engine.snapshot().incidents[0].status).toBe('awaiting_approval');
-    expect(() => engine.execute(id)).toThrow(/not ready/);
-    engine.execute(id, 'operator');
-    const state = engine.snapshot();
-    expect(state.incidents[0].status).toBe('resolved');
-    expect(state.audit.find((a) => a.tool === 'post_reversal')!.actor).toBe('operator');
+    const { engine, id } = transfer('down', 1);
+    expect(engine.world.incidents[0].status).toBe('awaiting_approval');
+    expect(() => engine.execute(id!)).toThrow(/not ready/);
+    engine.execute(id!, 'operator');
+    expect(engine.world.incidents[0].status).toBe('resolved');
+    expect(engine.world.audit.find((a) => a.tool === 'post_reversal')!.actor).toBe('operator');
   });
 
   it('Level 1 rejection escalates without acting', () => {
-    const { engine, id } = run('recoverable', 1);
-    engine.reject(id);
-    expect(engine.snapshot().incidents[0].status).toBe('escalated');
-    expect(engine.snapshot().audit.some((a) => a.tool === 'post_reversal')).toBe(false);
+    const { engine, id } = transfer('down', 1);
+    engine.reject(id!);
+    expect(engine.world.incidents[0].status).toBe('escalated');
+    expect(engine.world.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
+  });
+});
+
+describe('persistence and concurrency', () => {
+  it('a world survives a JSON round trip mid-incident', () => {
+    const { engine, id } = transfer('down');
+    const restored = new AcrEngine(JSON.parse(JSON.stringify(engine.world)));
+    restored.execute(id!);
+    expect(restored.world.incidents[0].status).toBe('resolved');
+    expect(balanceOf(restored, ADAEZE)).toBe(497_300);
+  });
+
+  it('two workers cannot both claim the same incident for planning', () => {
+    const engine = AcrEngine.create();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'down');
+    engine.startTransfer(ADAEZE, DEMO_TRANSFER);
+    engine.advance(601);
+    const { planning } = engine.runAutomatic('defer');
+    expect(planning).toHaveLength(1);
+    expect(engine.claim(planning)).toEqual(planning);
+    expect(engine.claim(planning)).toEqual([]);
   });
 
   it('every journey has a unique id', () => {
-    const ids = new AcrEngine().snapshot().journeys.map((j) => j.id);
+    const engine = AcrEngine.create();
+    for (let i = 0; i < 5; i += 1) engine.startTransfer(ADAEZE, { ...DEMO_TRANSFER, amount: 1_000 });
+    const ids = engine.world.journeys.map((j) => j.id);
     expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it('only journeys with a pending demo transaction can be triggered', () => {
-    const engine = new AcrEngine();
-    expect(engine.availableTriggers('JRN-2052')).toEqual([]);
-    expect(engine.availableTriggers(DEMO_JOURNEY_ID)).toEqual(['transfer_not_credited']);
-    expect(engine.availableTriggers(BILL_JOURNEY_ID)).toEqual(['bill_token_missing']);
-    engine.trigger(DEMO_JOURNEY_ID, 'transfer_not_credited');
-    expect(engine.availableTriggers(DEMO_JOURNEY_ID)).toEqual([]);
   });
 });
 
 describe('LLM advice is bounded by policy', () => {
+  function planning() {
+    const engine = AcrEngine.create();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'down');
+    engine.startTransfer(ADAEZE, DEMO_TRANSFER);
+    engine.advance(601);
+    const [incident] = engine.sweep();
+    return { engine, briefing: engine.investigate(incident.id), id: incident.id };
+  }
+
   it('uses the advised option when policy permits it', () => {
-    const engine = new AcrEngine('recoverable', 2);
-    const incident = engine.trigger(DEMO_JOURNEY_ID, 'transfer_not_credited')!;
-    const briefing = engine.investigate(incident.id);
+    const { engine, briefing, id } = planning();
     expect(briefing.options.find((o) => o.action === 'reverse_transfer')!.permitted).toBe(true);
-    engine.conclude(incident.id, { diagnosis: 'Bank down.', selectedAction: 'human_review', rationale: 'Be careful.', confidence: 0.8 }, 'test-model');
-    const state = engine.snapshot();
-    expect(state.decisions[incident.id].selected.action).toBe('human_review');
-    expect(state.incidents[0].assessment?.source).toBe('test-model');
+    engine.conclude(id, { diagnosis: 'Bank down.', selectedAction: 'human_review', rationale: 'Be careful.', confidence: 0.8 }, 'test-model');
+    expect(engine.world.decisions[id].selected.action).toBe('human_review');
+    expect(engine.world.incidents[0].assessment?.source).toBe('test-model');
   });
 
   it('overrides an advised option that policy blocks', () => {
-    const engine = new AcrEngine('recoverable', 2);
-    const incident = engine.trigger(DEMO_JOURNEY_ID, 'transfer_not_credited')!;
-    engine.investigate(incident.id);
-    engine.conclude(incident.id, { diagnosis: 'x', selectedAction: 'goodwill_credit', rationale: 'Be generous.', confidence: 0.9 });
-    const state = engine.snapshot();
-    expect(state.decisions[incident.id].selected.action).toBe('reverse_transfer');
-    expect(state.trace.some((t) => t.title === 'Policy overrode the agent')).toBe(true);
+    const { engine, id } = planning();
+    engine.conclude(id, { diagnosis: 'x', selectedAction: 'goodwill_credit', rationale: 'Be generous.', confidence: 0.9 });
+    expect(engine.world.decisions[id].selected.action).toBe('reverse_transfer');
+    expect(engine.world.trace.some((t) => t.title === 'Policy overrode the agent')).toBe(true);
   });
 });

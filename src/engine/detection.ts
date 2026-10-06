@@ -1,7 +1,8 @@
 // Deterministic risk rules (PRD §9: no ML prediction in the MVP). Each one watches for a debit
-// that hasn't produced what the customer paid for within a time window.
+// that hasn't produced what the customer paid for within a time window. Production windows are
+// minutes; the live stage demo compresses them to seconds.
 
-import type { Customer, Severity } from './types';
+import type { Customer, Severity } from './types.js';
 
 export interface RiskAssessment {
   rule: string;
@@ -11,19 +12,12 @@ export interface RiskAssessment {
   signals: string[];
 }
 
-export const minutesBetween = (from: string, to: string): number => (Date.parse(to) - Date.parse(from)) / 60_000;
+export const secondsBetween = (from: string, to: string): number => (Date.parse(to) - Date.parse(from)) / 1000;
 
-export const TRANSFER_RULE = {
-  id: 'DR-TRANSFER-01',
-  description: 'Customer debited + NIP transfer not confirmed successful within 10 minutes',
-  windowMinutes: 10,
-};
+export const formatWindow = (seconds: number): string =>
+  seconds >= 60 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds)} s`;
 
-export const BILL_RULE = {
-  id: 'DR-BILL-01',
-  description: 'Customer debited + no token delivered within 5 minutes',
-  windowMinutes: 5,
-};
+const naira = (n: number) => `₦${n.toLocaleString('en-NG')}`;
 
 function customerSignals(customer: Customer, signals: string[]): number {
   let added = 0;
@@ -38,27 +32,39 @@ function customerSignals(customer: Customer, signals: string[]): number {
   return added;
 }
 
-/** A transfer whose debit posted but which the switch hasn't confirmed as successful. */
+/** A transfer whose debit posted but which NIP hasn't confirmed as successful within the window. */
 export function assessTransferRisk(
-  customer: Customer, amount: number, debitedAt: string, now: string, nipCode: string,
+  customer: Customer, amount: number, debitedAt: string, now: string, nipCode: string, windowSeconds: number,
 ): RiskAssessment | null {
-  const minutes = minutesBetween(debitedAt, now);
-  if (nipCode === '00' || minutes < TRANSFER_RULE.windowMinutes) return null;
-  const signals = [`₦${amount.toLocaleString('en-NG')} debited`, `NIP response ${nipCode}, not confirmed after ${Math.round(minutes)} min`, 'Customer can see the debit in the app'];
+  const elapsed = secondsBetween(debitedAt, now);
+  if (nipCode === '00' || elapsed < windowSeconds) return null;
+  const signals = [`${naira(amount)} debited`, `NIP response ${nipCode}, not confirmed after ${formatWindow(elapsed)}`, 'Customer can see the debit in the app'];
   let risk = 80 + customerSignals(customer, signals);
   if (amount >= 50_000) {
     risk += 5;
     signals.push('Amount ≥ ₦50,000');
   }
   risk = Math.min(99, risk);
-  return { rule: TRANSFER_RULE.id, ruleDescription: TRANSFER_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
+  return {
+    rule: 'DR-TRANSFER-01',
+    ruleDescription: `Customer debited + NIP transfer not confirmed successful within ${formatWindow(windowSeconds)}`,
+    severity: risk >= 95 ? 'critical' : 'high',
+    risk,
+    signals,
+  };
 }
 
-/** A prepaid token purchase that was debited but never delivered. */
-export function assessBillRisk(customer: Customer, amount: number, debitedAt: string, now: string, delivered: boolean): RiskAssessment | null {
-  const minutes = minutesBetween(debitedAt, now);
-  if (delivered || minutes < BILL_RULE.windowMinutes) return null;
-  const signals = [`₦${amount.toLocaleString('en-NG')} debited`, `No token after ${Math.round(minutes)} min`, 'Customer may have no electricity'];
+/** A prepaid token purchase that was debited but not delivered within the window. */
+export function assessBillRisk(customer: Customer, amount: number, debitedAt: string, now: string, delivered: boolean, windowSeconds: number): RiskAssessment | null {
+  const elapsed = secondsBetween(debitedAt, now);
+  if (delivered || elapsed < windowSeconds) return null;
+  const signals = [`${naira(amount)} debited`, `No token after ${formatWindow(elapsed)}`, 'Customer may have no electricity'];
   const risk = Math.min(99, 84 + customerSignals(customer, signals));
-  return { rule: BILL_RULE.id, ruleDescription: BILL_RULE.description, severity: risk >= 95 ? 'critical' : 'high', risk, signals };
+  return {
+    rule: 'DR-BILL-01',
+    ruleDescription: `Customer debited + no token delivered within ${formatWindow(windowSeconds)}`,
+    severity: risk >= 95 ? 'critical' : 'high',
+    risk,
+    signals,
+  };
 }

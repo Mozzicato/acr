@@ -2,7 +2,7 @@
 // cannot invent actions or call tools. The support assistant answers the customer in the app from
 // what ACR already knows; it cannot move money or change anything.
 
-import type { ActionId } from './types';
+import type { ActionId } from './types.js';
 
 export const ADVISOR_MODEL = 'openai/gpt-oss-120b';
 

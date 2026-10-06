@@ -1,6 +1,6 @@
 // Core metrics (PRD §20), computed from the simulated journeys and recorded outcomes.
 
-import type { EngineState } from './agent';
+import type { EngineState } from './agent.js';
 
 export interface Metrics {
   active: number;

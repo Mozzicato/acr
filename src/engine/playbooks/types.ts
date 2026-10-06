@@ -1,25 +1,25 @@
-// A playbook holds everything specific to one failure type: how it is simulated and detected,
-// how to investigate it, which recoveries to propose, and how to carry out and verify the chosen
-// one. The engine owns the shared loop, the policy decision, escalation and learning.
+// A playbook holds everything specific to one failure type: what it watches for, how to investigate
+// it, which recoveries to propose, and how to carry out and verify the chosen one. The engine owns
+// the shared loop, the policy decision, escalation and learning.
 
-import type { RiskAssessment } from '../detection';
-import type { PolicyFacts } from '../policy';
-import type { BankSystems, SimClock } from '../systems';
-import type { Authorization, ToolLayer } from '../tools';
-import type { Customer, FailureKind, Incident, Journey, Phase, PolicyDecision, RecoveryOption, TraceStep } from '../types';
+import type { RiskAssessment } from '../detection.js';
+import type { PolicyFacts } from '../policy.js';
+import type { BankSystems } from '../systems.js';
+import type { Authorization, ToolLayer } from '../tools.js';
+import type { Customer, FailureKind, Incident, Journey, Phase, PolicyDecision, RecoveryOption, TraceStep } from '../types.js';
 
-export interface SimulationContext {
+export interface DetectionContext {
   journey: Journey;
   customer: Customer;
   systems: BankSystems;
-  clock: SimClock;
-  addEvent(type: string, summary: string, payload?: Record<string, unknown>): void;
+  now: string;
+  windowSeconds: number;
 }
 
-export interface Simulation {
+export interface Detection {
   /** Title and detail of the signal ACR received. */
   received: [string, string];
-  risk: RiskAssessment | null;
+  risk: RiskAssessment;
 }
 
 export interface PlaybookContext {
@@ -58,10 +58,11 @@ export interface Playbook {
   kind: FailureKind;
   /** Label for the learning record. */
   failure: string;
-  /** Name of the simulated failure event, for the demo button. */
-  trigger: string;
-  canTrigger(journey: Journey): boolean;
-  simulate(ctx: SimulationContext): Simulation;
+  /** Journey state this playbook's watchdog sweeps. */
+  watches: string;
+  /** Which detection window applies. */
+  window: 'transferSeconds' | 'billSeconds';
+  detect(ctx: DetectionContext): Detection | null;
   investigate(ctx: PlaybookContext): Investigation;
   execute(ctx: PlaybookContext, decision: PolicyDecision, auth: Authorization, investigation: Investigation): Execution;
 }

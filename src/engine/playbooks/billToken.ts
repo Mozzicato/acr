@@ -2,35 +2,25 @@
 // customer already owns it, so ACR delivers it: no money moves. If the biller's status is unknown,
 // neither redelivery nor a reversal is safe, so a human takes over.
 
-import { formatNgn } from '../../format';
-import { assessBillRisk } from '../detection';
-import { DEMO_BILL } from '../seed';
-import type { SupportContact, VendStatus } from '../systems';
-import type { Account, Customer, RecoveryOption, Transaction } from '../types';
-import type { Playbook } from './types';
+import { formatNgn } from '../../format.js';
+import { assessBillRisk, formatWindow, secondsBetween } from '../detection.js';
+import type { SupportContact, VendStatus } from '../systems.js';
+import type { Account, Customer, RecoveryOption, Transaction } from '../types.js';
+import type { Playbook } from './types.js';
 
 export const billTokenPlaybook: Playbook = {
   kind: 'bill_token_missing',
   failure: 'Bill paid, token not delivered',
-  trigger: 'token_vend_timeout',
+  watches: 'debited_awaiting_token',
+  window: 'billSeconds',
 
-  canTrigger: (journey) => journey.currentState === 'composing_bill',
-
-  simulate({ journey, customer, systems, clock, addEvent }) {
-    const { amount, biller, meter } = DEMO_BILL;
-    const debitedAt = clock.advance(60);
-    const tx = systems.buyToken(customer.accountNumber, amount, biller, meter, debitedAt);
-    journey.transactionId = tx.id;
-    addEvent('bill_paid', `Paid ${formatNgn(amount)} for a ${biller} token (meter ${meter})`, { transactionId: tx.id });
-    addEvent('vend_timeout', `${biller} did not respond. No token shown`, { transactionId: tx.id });
-    journey.currentState = 'debited_awaiting_token';
-
-    // The bills watchdog sweeps 5 minutes later.
-    clock.advance(5 * 60);
-    addEvent('token_overdue', 'Watchdog: no token 5 min after debit', { transactionId: tx.id });
+  detect({ journey, customer, systems, now, windowSeconds }) {
+    const tx = systems.getTransaction(journey.transactionId);
+    const risk = assessBillRisk(customer, tx.amount, tx.at, now, !!tx.bill?.delivered, windowSeconds);
+    if (!risk) return null;
     return {
-      received: [`Watchdog: ${tx.id} has no token after 5 min`, `${formatNgn(amount)} ${biller} · meter ${meter}`],
-      risk: assessBillRisk(customer, amount, debitedAt, clock.now(), tx.bill!.delivered),
+      received: [`Watchdog: ${tx.id} has no token after ${formatWindow(secondsBetween(tx.at, now))}`, `${formatNgn(tx.amount)} ${tx.bill!.biller} · meter ${tx.bill!.meter}`],
+      risk,
     };
   },
 

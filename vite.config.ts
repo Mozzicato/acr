@@ -1,12 +1,19 @@
+import { resolve } from 'node:path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { agentProxy } from './server/agentProxy';
+import { apiPlugin } from './server/plugin.js';
 
 export default defineConfig(({ mode }) => {
-  // Load all variables (not just VITE_*) for the server side only; nothing here is exposed to the client.
+  // Server-side only: nothing loaded here is exposed to the browser bundle.
   const env = loadEnv(mode, process.cwd(), '');
   return {
-    plugins: [react(), agentProxy(env.GROQ_API_KEY)],
+    plugins: [react(), apiPlugin(env)],
+    build: {
+      rollupOptions: {
+        input: { console: resolve(import.meta.dirname, 'index.html'), app: resolve(import.meta.dirname, 'app/index.html') },
+      },
+    },
+    worker: { format: 'es' },
     test: { include: ['src/**/*.test.ts'] },
   };
 });

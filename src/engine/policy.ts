@@ -1,7 +1,7 @@
 // Recovery policy engine (PRD §11, §13). It is the final authority: an action runs only if it
 // matches a named policy, its evidence holds, and the autonomy level permits it.
 
-import type { AutonomyLevel, PolicyDecision, PolicyVerdict, RecoveryOption } from './types';
+import type { AutonomyLevel, PolicyDecision, PolicyVerdict, RecoveryOption } from './types.js';
 
 /** Reversals above this need an operator even at Level 2. */
 export const AUTO_REVERSAL_LIMIT = 1_000_000;

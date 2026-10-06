@@ -19,7 +19,7 @@ export function Kpis({ m }: { m: Metrics }) {
   return (
     <>
       <div className="kpis">
-        <Kpi label="Active journeys" value={m.active} icon={Activity} sub="Simulated" />
+        <Kpi label="Journeys" value={m.active} icon={Activity} sub="Since last reset" />
         <Kpi label="Healthy" value={m.healthy} icon={CircleCheck} tone="good" sub={m.recovered ? `${m.recovered} recovered by ACR` : 'On track'} />
         <Kpi label="At risk" value={m.atRisk} icon={TriangleAlert} tone={m.atRisk ? 'warn' : undefined} />
         <Kpi label="Critical" value={m.critical} icon={CircleAlert} tone={m.critical ? 'bad' : undefined} />

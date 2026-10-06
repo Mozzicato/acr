@@ -1,8 +1,14 @@
 // Tool layer + permission layer (PRD §12). The agent never touches bank systems directly:
 // every call goes through here and produces an audit entry.
 
-import type { BankSystems, SimClock } from './systems';
-import type { ActionId, Actor, AuditEntry, Notification, PolicyDecision } from './types';
+import type { BankSystems, Clock } from './systems.js';
+import type { ActionId, Actor, AuditEntry, Notification, PolicyDecision } from './types.js';
+
+/** Where audit entries go. Lives in the persisted world so numbering survives between requests. */
+export interface AuditLog {
+  audit: AuditEntry[];
+  auditSeq: number;
+}
 
 export const READ_TOOLS = [
   'get_customer',
@@ -36,12 +42,10 @@ export class PermissionDenied extends Error {}
 const CALL_SECONDS = 3;
 
 export class ToolLayer {
-  private seq = 0;
-
   constructor(
     private readonly systems: BankSystems,
-    private readonly clock: SimClock,
-    readonly audit: AuditEntry[],
+    private readonly clock: Clock,
+    private readonly log: AuditLog,
   ) {}
 
   read(incidentId: string, tool: ReadTool, input: Record<string, string>): unknown {
@@ -52,7 +56,7 @@ export class ToolLayer {
         case 'get_account': return { ...s.getAccount(input.accountNumber) };
         case 'get_transaction': return structuredClone(s.getTransaction(input.transactionId));
         case 'nip_status_query': return s.statusQuery(input.transactionId);
-        case 'get_bank_status': return { bank: input.bank, status: s.bankStatus.get(input.bank) ?? 'up' };
+        case 'get_bank_status': return { bank: input.bank, status: s.data.bankStatus[input.bank] ?? 'up' };
         case 'biller_requery': return s.billerRequery(input.transactionId);
         case 'search_support_history': return s.searchSupportHistory(input.customerId);
       }
@@ -73,7 +77,7 @@ export class ToolLayer {
           const customer = s.getCustomer(input.customerId);
           const channel = customer.preferences.channel;
           const notification: Notification = {
-            id: `NTF-${String(s.outbox.length + 1).padStart(4, '0')}`,
+            id: `NTF-${String(s.data.outbox.length + 1).padStart(4, '0')}`,
             incidentId,
             customerId: customer.id,
             channel,
@@ -109,14 +113,14 @@ export class ToolLayer {
 
   private record(incidentId: string, tool: string, actor: Actor, input: Record<string, unknown>, run: () => unknown): unknown {
     const at = this.clock.advance(CALL_SECONDS);
-    const id = `AUD-${String(++this.seq).padStart(4, '0')}`;
+    const id = `AUD-${String(++this.log.auditSeq).padStart(4, '0')}`;
     try {
       const output = run();
-      this.audit.push({ id, incidentId, tool, actor, input, output, at, ok: true });
+      this.log.audit.push({ id, incidentId, tool, actor, input, output, at, ok: true });
       return output;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.audit.push({ id, incidentId, tool, actor, input, output: { error: message }, at, ok: false });
+      this.log.audit.push({ id, incidentId, tool, actor, input, output: { error: message }, at, ok: false });
       throw error;
     }
   }

@@ -1,30 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { decide, type PolicyFacts } from './policy';
-import { DEMO_TRANSFER, seed } from './seed';
-import { SimClock } from './systems';
-import { PermissionDenied, ToolLayer } from './tools';
-import type { AuditEntry, RecoveryOption } from './types';
+import { AcrEngine } from './agent.js';
+import { decide, type PolicyFacts } from './policy.js';
+import { DEMO_CUSTOMERS, DEMO_TRANSFER } from './seed.js';
+import { SimClock } from './systems.js';
+import { PermissionDenied, ToolLayer, type AuditLog } from './tools.js';
+import type { RecoveryOption } from './types.js';
 
 const NOW = '2026-10-04T13:10:00+01:00';
 
 function setup(level: 0 | 1 | 2 = 2, amount = DEMO_TRANSFER.amount) {
-  const { systems } = seed('recoverable');
-  const account = systems.getCustomer('C201').accountNumber;
+  const { systems } = AcrEngine.create();
+  const account = systems.getCustomer(DEMO_CUSTOMERS.transfer).accountNumber;
   systems.getAccount(account).balance += 5_000_000;
-  const tx = systems.sendTransfer(account, amount, DEMO_TRANSFER.beneficiary, NOW);
-  const audit: AuditEntry[] = [];
-  const tools = new ToolLayer(systems, new SimClock(NOW), audit);
+  systems.data.bankStatus[DEMO_TRANSFER.bank] = 'down';
+  const beneficiary = { name: DEMO_TRANSFER.name, bank: DEMO_TRANSFER.bank, account: DEMO_TRANSFER.account };
+  const tx = systems.sendTransfer(account, amount, beneficiary, 'Transfer', NOW);
+  const log: AuditLog = { audit: [], auditSeq: 0 };
+  const tools = new ToolLayer(systems, SimClock.at(NOW), log);
   const option: RecoveryOption = { action: 'reverse_transfer', label: 'Reverse', successProbability: 99, costNgn: 0, customerImpact: 'low', transactionId: tx.id };
   const facts: PolicyFacts = { kind: 'transfer_not_credited', transactionId: tx.id, amount, debitPosted: true, nipFinal: true, nipCode: '91', alreadyReversed: false };
   const decision = decide('INC-0001', [option, { ...option, action: 'human_review' }], facts, level);
-  return { systems, audit, tools, decision, tx, account };
+  return { systems, log, tools, decision, tx, account };
 }
 
 describe('tool permission layer', () => {
   it('refuses write tools without an authorization and audits the refusal', () => {
-    const { tools, audit, tx } = setup();
+    const { tools, log, tx } = setup();
     expect(() => tools.write('INC-0001', 'post_reversal', { transactionId: tx.id }, null)).toThrow(PermissionDenied);
-    expect(audit.at(-1)).toMatchObject({ tool: 'post_reversal', ok: false });
+    expect(log.audit.at(-1)).toMatchObject({ tool: 'post_reversal', ok: false });
   });
 
   it('refuses a transaction other than the one the policy authorized', () => {
@@ -32,7 +35,7 @@ describe('tool permission layer', () => {
     expect(() => tools.write('INC-0001', 'post_reversal', { transactionId: 'HIS-C201-1' }, { decision, approvedBy: 'policy-engine' })).toThrow(/differs/);
   });
 
-  it('refuses another incident\'s authorization', () => {
+  it("refuses another incident's authorization", () => {
     const { tools, decision } = setup();
     expect(() => tools.write('INC-0002', 'send_notification', { customerId: 'C201', title: 't', body: 'b' }, { decision, approvedBy: 'policy-engine' }))
       .toThrow(/another incident/);
