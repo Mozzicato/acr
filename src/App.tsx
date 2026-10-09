@@ -21,9 +21,9 @@ import { LiveControl } from './components/LiveControl';
 import { StressPanel } from './components/StressPanel';
 import { Panel } from './components/ui';
 
-const POLL_MS = 1_500;
+const POLL_MS = 1_000;
 const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const STEP_MS = reducedMotion ? 60 : 380;
+const STEP_MS = reducedMotion ? 40 : 110;
 
 interface WorldResponse {
   state: EngineState;
@@ -59,9 +59,14 @@ export default function App() {
   // so the console's tick is what moves ACR through detect → investigate → decide → act.
   useEffect(() => {
     void load();
+    let inFlight = false;
     const timer = setInterval(() => {
-      if (document.hidden) return;
-      void api('world/tick', { body: {} }).catch(() => undefined).finally(() => void load());
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      void api('world/tick', { body: {}, timeoutMs: 10_000 }).catch(() => undefined).finally(() => {
+        inFlight = false;
+        void load();
+      });
     }, POLL_MS);
     return () => clearInterval(timer);
   }, [load]);

@@ -7,7 +7,7 @@ import {
 } from '../src/engine/advisor.js';
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const TIMEOUT_MS = 20_000;
+const TIMEOUT_MS = 7_000;
 
 async function groq(apiKey: string, body: Record<string, unknown>): Promise<string> {
   const response = await fetch(GROQ_URL, {

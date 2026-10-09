@@ -76,15 +76,20 @@ export function CustomerApp() {
     }
   }, [customerId]);
 
-  // Customer phones read their account only; the operations console advances the live recovery.
+  // Phones also nudge the agent (one request at a time) so recovery never waits on the console being open.
   useEffect(() => {
     if (!customerId) return;
     void refresh();
+    let inFlight = false;
     const timer = setInterval(() => {
       if (document.hidden) return;
-      void refresh();
+      if (!inFlight) {
+        inFlight = true;
+        void api('world/tick', { body: {}, timeoutMs: 10_000 }).catch(() => undefined).finally(() => { inFlight = false; void refresh(); });
+      }
     }, POLL_MS);
-    return () => clearInterval(timer);
+    const reads = setInterval(() => { if (!document.hidden) void refresh(); }, 1_000);
+    return () => { clearInterval(timer); clearInterval(reads); };
   }, [customerId, refresh]);
 
   // Announce a recovery the moment it completes, but not ones that were already done when the app opened.
@@ -424,7 +429,7 @@ function Bills({ view, back, done }: { view: CustomerView; back: () => void; don
 
 // ── Status ───────────────────────────────────────────────────────────────────
 const STATUS_COPY: Record<CustomerJourney['status'], { title: string; short: string }> = {
-  processing: { title: 'Processing', short: 'Waiting for confirmation.' },
+  processing: { title: 'Confirming with the other bank', short: 'Your account is debited. Not confirmed yet, so this is not marked successful.' },
   successful: { title: 'Successful', short: 'All done.' },
   failed: { title: "This didn't go through", short: "Your account was debited. We're already checking." },
   fixing: { title: "We're fixing this for you", short: 'We spotted a problem. No need to call us.' },
