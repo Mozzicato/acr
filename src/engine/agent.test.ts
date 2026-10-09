@@ -3,6 +3,7 @@ import { AcrEngine } from './agent.js';
 import { computeMetrics } from './metrics.js';
 import { BILLER, DEMO_BILL, DEMO_CUSTOMERS, DEMO_TRANSFER } from './seed.js';
 import type { BankHealth, BillerHealth } from './systems.js';
+import { supportContext } from './support.js';
 import type { AutonomyLevel } from './types.js';
 
 const ADAEZE = DEMO_CUSTOMERS.transfer;
@@ -53,6 +54,16 @@ describe('normal operation', () => {
     expect(engine.sweep()).toHaveLength(0);
     engine.advance(2);
     expect(engine.sweep()).toHaveLength(1);
+  });
+
+  it('tells support about an unsettled transfer before the watchdog opens an incident', () => {
+    const engine = AcrEngine.create();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'unstable');
+    engine.startTransfer(ADAEZE, DEMO_TRANSFER);
+
+    const context = supportContext(engine, ADAEZE);
+    expect(context.issue).toMatchObject({ what: expect.stringContaining('Transfer'), status: 'being looked into' });
+    expect(context.balanceState).toContain('pending debit of ₦85,000');
   });
 
   it('validates what the customer enters', () => {

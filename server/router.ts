@@ -179,7 +179,9 @@ export async function handle(req: Request, env: Env): Promise<Response> {
         });
         const key = llmKey(env);
         let reply = fallbackSupportReply(context);
-        if (key && allowed) {
+        // During an unsettled recovery, account truth outranks a conversational model.
+        // The deterministic reply names the pending debit and cannot claim the transfer succeeded.
+        if (key && allowed && context.issue?.status !== 'being looked into') {
           try {
             reply = await supportReply(key, context, messages);
           } catch {

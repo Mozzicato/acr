@@ -58,6 +58,10 @@ function statusOf(journey: Journey, incident: Incident | undefined): CustomerSta
   return 'processing';
 }
 
+function isUnsettled(journey: Journey): boolean {
+  return journey.currentState.startsWith('debited_awaiting');
+}
+
 export function customerView(engine: AcrEngine, customerId: string): CustomerView {
   const w = engine.world;
   const customer = engine.systems.getCustomer(customerId);
@@ -65,7 +69,7 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
   const pendingJourney = w.journeys
     .filter((j) => j.customerId === customerId)
     .map((journey) => ({ journey, incident: w.incidents.filter((i) => i.journeyId === journey.id).at(-1) }))
-    .find(({ incident }) => incident && !['resolved', 'escalated'].includes(incident.status));
+    .find(({ journey, incident }) => isUnsettled(journey) && (!incident || !['resolved', 'escalated'].includes(incident.status)));
   const pendingTransaction = pendingJourney && w.bank.transactions[pendingJourney.journey.transactionId];
   const journeys = w.journeys
     .filter((j) => j.customerId === customerId && j.transactionId && !j.transactionId.startsWith('HIS-'))
@@ -100,7 +104,7 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
 export function supportContext(engine: AcrEngine, customerId: string): SupportContext {
   const view = customerView(engine, customerId);
   const w = engine.world;
-  const latest = view.journeys[0];
+  const latest = view.journeys.find((journey) => isUnsettled(w.journeys.find((candidate) => candidate.id === journey.id)!)) ?? view.journeys[0];
   const incident = latest && w.incidents.filter((i) => i.journeyId === latest.id).at(-1);
   const sent = incident && w.bank.outbox.filter((n) => n.incidentId === incident.id).at(-1);
   return {
@@ -116,10 +120,10 @@ export function supportContext(engine: AcrEngine, customerId: string): SupportCo
       amount: `${t.direction === 'credit' ? '+' : '-'}${formatNgn(t.amount)}`,
       status: t.status,
     })),
-    issue: latest && incident ? {
+    issue: latest && (incident || isUnsettled(w.journeys.find((journey) => journey.id === latest.id)!)) ? {
       what: latest.title,
       status: latest.status === 'fixed' ? 'fixed automatically' : latest.status === 'with_agent' ? 'with a human agent' : 'being looked into',
-      whatAcrDid: incident.status === 'resolved' ? incident.resolution : null,
+      whatAcrDid: incident?.status === 'resolved' ? incident.resolution : null,
       messageSent: sent?.body ?? null,
     } : null,
   };
