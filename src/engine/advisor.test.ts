@@ -23,6 +23,7 @@ describe('support assistant', () => {
     bank: 'NovaBank',
     customerName: 'Adaeze Okafor',
     balance: '₦497,300',
+    balanceState: 'Your available balance is ₦497,300 and there is no unresolved ACR recovery.',
     recentTransactions: [],
     issue: { what: 'your transfer to Tunde', status: 'resolved', whatAcrDid: 'We reversed your ₦85,000.', messageSent: null },
   };
@@ -40,5 +41,10 @@ describe('support assistant', () => {
   it('falls back to what ACR recorded when the LLM is unavailable', () => {
     expect(fallbackSupportReply(context)).toContain('We reversed your ₦85,000.');
     expect(fallbackSupportReply({ ...context, issue: null })).toContain('₦497,300');
+    expect(fallbackSupportReply({
+      ...context,
+      balanceState: 'Your available balance is ₦412,300. It includes a pending debit of ₦85,000.',
+      issue: { ...context.issue!, status: 'being looked into', whatAcrDid: null },
+    })).toContain('debit remains pending');
   });
 });

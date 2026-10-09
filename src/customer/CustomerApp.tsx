@@ -50,13 +50,20 @@ export function CustomerApp() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' });
   const [error, setError] = useState<string | null>(null);
   const embedded = new URLSearchParams(location.search).has('as');
+  const latestRefresh = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!customerId) return;
+    const request = ++latestRefresh.current;
     try {
-      setView(await api<CustomerView>('app/me', { query: { id: customerId } }));
-      setError(null);
+      const nextView = await api<CustomerView>('app/me', { query: { id: customerId } });
+      // A slower earlier poll must not overwrite a newer balance or recovery status.
+      if (request === latestRefresh.current) {
+        setView(nextView);
+        setError(null);
+      }
     } catch (e) {
+      if (request !== latestRefresh.current) return;
       if (e instanceof ApiError && e.status === 404) {
         try { localStorage.removeItem(ID_KEY); } catch { /* storage unavailable */ }
         setCustomerId(null);
@@ -67,13 +74,12 @@ export function CustomerApp() {
     }
   }, [customerId]);
 
-  // Poll the bank, and nudge the agent along: on a serverless host nothing runs between requests.
+  // Customer phones read their account only; the operations console advances the live recovery.
   useEffect(() => {
     if (!customerId) return;
     void refresh();
     const timer = setInterval(() => {
       if (document.hidden) return;
-      void api('world/tick', { body: {} }).catch(() => undefined);
       void refresh();
     }, POLL_MS);
     return () => clearInterval(timer);
@@ -189,6 +195,7 @@ function Home({ view, go }: { view: CustomerView; go: (s: Screen) => void }) {
           </div>
           <div className="eco-balance-label">Available balance</div>
           <div className="eco-balance" aria-live="polite">{hidden ? '₦ ••••••' : formatNgn(view.balance)}</div>
+          {view.pendingRecovery && !hidden && <div className="eco-balance-pending"><LoaderCircle size={13} className="spin" aria-hidden="true" /> Includes {formatNgn(view.pendingRecovery.amount)} under ACR review</div>}
         </div>
       </header>
 

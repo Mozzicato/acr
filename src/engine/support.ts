@@ -25,6 +25,8 @@ export interface CustomerJourney {
 export interface CustomerView {
   customer: { id: string; name: string; tier: string; accountNumber: string };
   balance: number;
+  /** Debit under active recovery; it is not settled or available to spend. */
+  pendingRecovery: { amount: number; title: string } | null;
   transactions: Transaction[];
   notifications: Notification[];
   journeys: CustomerJourney[];
@@ -60,6 +62,11 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
   const w = engine.world;
   const customer = engine.systems.getCustomer(customerId);
   const account = engine.systems.getAccount(customer.accountNumber);
+  const pendingJourney = w.journeys
+    .filter((j) => j.customerId === customerId)
+    .map((journey) => ({ journey, incident: w.incidents.filter((i) => i.journeyId === journey.id).at(-1) }))
+    .find(({ incident }) => incident && !['resolved', 'escalated'].includes(incident.status));
+  const pendingTransaction = pendingJourney && w.bank.transactions[pendingJourney.journey.transactionId];
   const journeys = w.journeys
     .filter((j) => j.customerId === customerId && j.transactionId && !j.transactionId.startsWith('HIS-'))
     .slice(-10)
@@ -80,6 +87,9 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
   return {
     customer: { id: customer.id, name: customer.name, tier: customer.tier, accountNumber: customer.accountNumber },
     balance: account.balance,
+    pendingRecovery: pendingTransaction?.direction === 'debit'
+      ? { amount: pendingTransaction.amount, title: pendingJourney!.journey.title }
+      : null,
     transactions: engine.systems.transactionsFor(account.number).slice(0, 15),
     notifications: w.bank.outbox.filter((n) => n.customerId === customerId),
     journeys,
@@ -97,6 +107,9 @@ export function supportContext(engine: AcrEngine, customerId: string): SupportCo
     bank: BANK_NAME,
     customerName: view.customer.name,
     balance: formatNgn(view.balance),
+    balanceState: view.pendingRecovery
+      ? `Your available balance is ${formatNgn(view.balance)}. It includes a pending debit of ${formatNgn(view.pendingRecovery.amount)} for ${view.pendingRecovery.title}; that money has not been returned or settled yet.`
+      : `Your available balance is ${formatNgn(view.balance)} and there is no unresolved ACR recovery.`,
     recentTransactions: view.transactions.slice(0, 6).map((t) => ({
       when: formatTime(t.at),
       description: t.narration,

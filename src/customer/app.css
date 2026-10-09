@@ -94,6 +94,7 @@ button { cursor: pointer; }
 .eco-eye { display: grid; place-items: center; width: 40px; height: 40px; margin: -8px -8px -8px 0; border: 0; background: transparent; color: var(--eco-blue); border-radius: 50%; }
 .eco-balance-label { margin-top: 6px; font-size: 13px; color: var(--eco-muted); }
 .eco-balance { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.eco-balance-pending { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: var(--eco-warn); font-size: 12px; font-weight: 600; }
 
 /* ── Quick actions ── */
 .eco-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 60px 16px 0; }

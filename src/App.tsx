@@ -39,13 +39,19 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<number | null>(null);
   const seenIncidents = useRef<number | null>(null);
+  const latestLoad = useRef(0);
 
   const load = useCallback(async () => {
+    const request = ++latestLoad.current;
     try {
-      setWorld(await api<WorldResponse>('world'));
-      setError(null);
+      const response = await api<WorldResponse>('world');
+      // Polls can finish out of order; never render an older snapshot after a newer one.
+      if (request === latestLoad.current) {
+        setWorld(response);
+        setError(null);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Cannot reach the server.');
+      if (request === latestLoad.current) setError(e instanceof Error ? e.message : 'Cannot reach the server.');
     }
   }, []);
 

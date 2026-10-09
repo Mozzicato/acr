@@ -42,7 +42,7 @@ export function AgentTrace({ steps, thinking, idleText }: { steps: TraceStep[]; 
             );
           })}
           {thinking && (
-            <li className="thinking"><span className="pulse" aria-hidden="true" />{thinking}</li>
+            <li className="thinking"><span className="trace-spinner" aria-hidden="true" />{thinking}</li>
           )}
         </ol>
       )}
