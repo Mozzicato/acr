@@ -3,7 +3,7 @@ import { AcrEngine } from './agent.js';
 import { computeMetrics } from './metrics.js';
 import { BILLER, DEMO_BILL, DEMO_CUSTOMERS, DEMO_TRANSFER } from './seed.js';
 import type { BankHealth, BillerHealth } from './systems.js';
-import { supportContext } from './support.js';
+import { customerView, supportContext } from './support.js';
 import type { AutonomyLevel } from './types.js';
 
 const ADAEZE = DEMO_CUSTOMERS.transfer;
@@ -122,6 +122,55 @@ describe('transfer debited but not credited', () => {
     engine.runAutomatic('rules');
     expect(engine.world.incidents[0].status).toBe('awaiting_approval');
     expect(engine.world.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
+  });
+});
+
+describe('transfer held while the other bank is unstable', () => {
+  const held = () => {
+    const { engine, journey, id } = transfer('unstable');
+    return { engine, journey, id: id! };
+  };
+
+  it('holds the transfer and tells the customer they can take the money back', () => {
+    const { engine, journey } = held();
+    expect(engine.isHeld(journey)).toBe(true);
+    expect(customerView(engine, ADAEZE).journeys[0].status).toBe('held');
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300 - 85_000);
+  });
+
+  it('returns the money once the customer asks, and cannot pay twice', () => {
+    const { engine, journey, id } = held();
+    engine.returnMoney(ADAEZE, journey.id);
+    engine.runAutomatic('rules');
+    expect(engine.world.incidents.find((i) => i.id === id)!.status).toBe('resolved');
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300);
+    expect(customerView(engine, ADAEZE).journeys[0]).toMatchObject({ status: 'fixed', outcome: 'reversed' });
+    expect(engine.world.recoveries.filter((r) => r.incidentId === id)).toHaveLength(1);
+    expect(() => engine.returnMoney(ADAEZE, journey.id)).toThrow(/not ready/);
+  });
+
+  it('refuses to return another customer\'s transfer', () => {
+    const { engine, journey } = held();
+    expect(() => engine.returnMoney(BOLA, journey.id)).toThrow(/not ready/);
+  });
+
+  it('delivers the transfer when the bank comes back, with no refund', () => {
+    const { engine, id } = held();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'up');
+    engine.monitorHeld();
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300 - 85_000);
+    expect(engine.world.incidents.find((i) => i.id === id)!.status).toBe('resolved');
+    expect(customerView(engine, ADAEZE).journeys[0]).toMatchObject({ status: 'fixed', outcome: 'delivered' });
+    expect(engine.world.audit.some((a) => a.tool === 'post_reversal')).toBe(false);
+  });
+
+  it('reverses the money if the bank goes down while the transfer is held', () => {
+    const { engine, id } = held();
+    engine.setBankStatus(DEMO_TRANSFER.bank, 'down');
+    engine.monitorHeld();
+    engine.runAutomatic('rules');
+    expect(engine.world.incidents.find((i) => i.id === id)!.status).toBe('resolved');
+    expect(balanceOf(engine, ADAEZE)).toBe(497_300);
   });
 });
 

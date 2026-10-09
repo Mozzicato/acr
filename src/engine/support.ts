@@ -8,7 +8,7 @@ import type { Incident, Journey, Notification, Transaction } from './types.js';
 import { formatNgn, formatTime } from '../format.js';
 
 /** How a journey looks to the customer: plain status, never internal incident jargon. */
-export type CustomerStatus = 'processing' | 'successful' | 'failed' | 'fixing' | 'fixed' | 'with_agent';
+export type CustomerStatus = 'processing' | 'successful' | 'failed' | 'fixing' | 'fixed' | 'with_agent' | 'held';
 
 export interface CustomerJourney {
   id: string;
@@ -16,8 +16,10 @@ export interface CustomerJourney {
   transactionId: string;
   status: CustomerStatus;
   amount: number;
+  /** The other bank, for transfers. */
+  bank: string | null;
   /** What ACR did for the customer once fixed. */
-  outcome: 'reversed' | 'token' | null;
+  outcome: 'reversed' | 'delivered' | 'token' | null;
   /** What the agent is doing, in plain words, for the live progress list. */
   agentSteps: Array<{ title: string; detail?: string; tone: 'ok' | 'warn' | 'fail' | 'info' }>;
   /** Customer-facing timeline. */
@@ -45,6 +47,8 @@ const CUSTOMER_STEPS: Record<string, { label: string; tone: CustomerJourney['ste
   transfer_successful: { label: 'Received by the other bank', tone: 'ok' },
   transfer_pending: { label: 'Waiting for the other bank', tone: 'warn' },
   transfer_failed: { label: 'The other bank did not respond', tone: 'fail' },
+  transfer_held: { label: 'We are holding it while the bank confirms', tone: 'agent' },
+  transfer_recalled: { label: 'You asked for your money back', tone: 'agent' },
   transfer_settled: { label: 'Received by the other bank', tone: 'ok' },
   bill_paid: { label: 'Payment made', tone: 'ok' },
   token_delivered: { label: 'Token delivered', tone: 'ok' },
@@ -55,7 +59,8 @@ const CUSTOMER_STEPS: Record<string, { label: string; tone: CustomerJourney['ste
   escalated_to_human: { label: 'A support agent is handling this', tone: 'agent' },
 };
 
-function statusOf(journey: Journey, incident: Incident | undefined): CustomerStatus {
+function statusOf(journey: Journey, incident: Incident | undefined, held: boolean): CustomerStatus {
+  if (held) return 'held';
   if (incident?.status === 'resolved') return 'fixed';
   if (incident?.status === 'escalated') return 'with_agent';
   if (incident) return 'fixing';
@@ -67,6 +72,7 @@ function statusOf(journey: Journey, incident: Incident | undefined): CustomerSta
 const DECIDE_COPY: Record<string, string> = {
   'ACTION APPROVED': 'Confirmed safe to return your money',
   'ESCALATED TO HUMAN': 'Handed to a support agent with everything we found',
+  'TRANSFER HELD': 'Holding your transfer: it may still go through',
 };
 
 function agentSteps(w: AcrEngine['world'], journey: Journey): CustomerJourney['agentSteps'] {
@@ -74,7 +80,7 @@ function agentSteps(w: AcrEngine['world'], journey: Journey): CustomerJourney['a
   if (!own.length) return [];
   const steps: CustomerJourney['agentSteps'] = [{ title: 'ACR noticed this transfer was not confirmed', tone: 'warn' }];
   for (const s of own) {
-    if (s.phase === 'decide' && DECIDE_COPY[s.title]) steps.push({ title: DECIDE_COPY[s.title], tone: s.status === 'ok' ? 'ok' : 'info' });
+    if (s.phase === 'decide' && (DECIDE_COPY[s.title] || s.status === 'info')) steps.push({ title: DECIDE_COPY[s.title] ?? s.title, detail: DECIDE_COPY[s.title] ? undefined : s.detail, tone: s.status === 'ok' ? 'ok' : 'info' });
     else if (['investigate', 'act', 'verify'].includes(s.phase) && !s.title.startsWith('Customer:') && !s.title.startsWith('Investigating')) {
       steps.push({ title: s.title, detail: s.detail, tone: s.status === 'ok' ? 'ok' : s.status === 'fail' ? 'fail' : s.status === 'warn' ? 'warn' : 'info' });
     }
@@ -106,9 +112,10 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
         id: j.id,
         title: j.title,
         transactionId: j.transactionId,
-        status: statusOf(j, incident),
+        status: statusOf(j, incident, engine.isHeld(j)),
         amount: tx?.amount ?? 0,
-        outcome: incident?.status !== 'resolved' ? null : tx?.status === 'reversed' ? 'reversed' : tx?.bill?.delivered ? 'token' : null,
+        bank: tx?.beneficiary?.bank ?? null,
+        outcome: incident?.status !== 'resolved' ? null : tx?.status === 'reversed' ? 'reversed' : tx?.bill?.delivered ? 'token' : tx?.status === 'successful' ? 'delivered' : null,
         agentSteps: agentSteps(w, j),
         steps: j.events.flatMap((e) => (CUSTOMER_STEPS[e.type] ? [{ at: e.at, ...CUSTOMER_STEPS[e.type] }] : [])),
         token: tx?.bill?.delivered ? tx.bill.token : null,
@@ -150,7 +157,7 @@ export function supportContext(engine: AcrEngine, customerId: string): SupportCo
     })),
     issue: latest && (incident || isUnsettled(w.journeys.find((journey) => journey.id === latest.id)!)) ? {
       what: latest.title,
-      status: latest.status === 'fixed' ? 'fixed automatically' : latest.status === 'with_agent' ? 'with a human agent' : 'being looked into',
+      status: latest.status === 'fixed' ? 'fixed automatically' : latest.status === 'held' ? 'on hold because the other bank is unstable; the transfer may still go through, and the customer can tap Return my money on the transfer screen' : latest.status === 'with_agent' ? 'with a human agent' : 'being looked into',
       whatAcrDid: incident?.status === 'resolved' ? incident.resolution : null,
       messageSent: sent?.body ?? null,
     } : null,

@@ -149,7 +149,7 @@ export function CustomerApp() {
         <div className="eco-splash" role="alertdialog" aria-labelledby="splash-title">
           <div className="eco-splash-card">
             <span className="eco-splash-icon" aria-hidden="true"><BadgeCheck size={40} /></span>
-            <h2 id="splash-title">{splash.outcome === 'reversed' ? 'Your transfer has been reversed' : 'Your token has been delivered'}</h2>
+            <h2 id="splash-title">{splash.outcome === 'reversed' ? 'Your transfer has been reversed' : splash.outcome === 'delivered' ? 'Your transfer went through' : 'Your token has been delivered'}</h2>
             <div className="eco-splash-amount">{formatNgn(splash.amount)}</div>
             <p>{splash.notification?.body ?? 'ACR fixed this for you. You did not need to contact anyone.'}</p>
             <button type="button" className="eco-btn" autoFocus onClick={() => { go({ name: 'status', journeyId: splash.id }); setSplash(null); }}>See what happened</button>
@@ -161,7 +161,7 @@ export function CustomerApp() {
         {screen.name === 'home' && <Home view={view} go={go} />}
         {screen.name === 'transfer' && <Transfer view={view} back={() => go({ name: 'home' })} done={(journeyId) => { void refresh(); go({ name: 'status', journeyId }); }} />}
         {screen.name === 'bills' && <Bills view={view} back={() => go({ name: 'home' })} done={(journeyId) => { void refresh(); go({ name: 'status', journeyId }); }} />}
-        {screen.name === 'status' && <Status view={view} journeyId={screen.journeyId} go={go} />}
+        {screen.name === 'status' && <Status view={view} journeyId={screen.journeyId} go={go} onChanged={() => void refresh()} />}
         {screen.name === 'help' && <Help view={view} back={() => go({ name: 'home' })} />}
       </main>
       <nav className="eco-tabs" aria-label="Main">
@@ -230,7 +230,7 @@ function Home({ view, go }: { view: CustomerView; go: (s: Screen) => void }) {
   const [hidden, setHidden] = useState(false);
   const firstName = view.customer.name.split(' ')[0];
   const latest = view.journeys[0];
-  const active = latest && ['failed', 'fixing', 'fixed', 'with_agent'].includes(latest.status) ? latest : null;
+  const active = latest && ['failed', 'fixing', 'fixed', 'with_agent', 'held'].includes(latest.status) ? latest : null;
 
   return (
     <>
@@ -298,7 +298,7 @@ function Action({ icon, label, onClick, disabled }: { icon: ReactNode; label: st
 
 type Tag = [label: string, tone: 'warn' | 'bad' | 'good' | 'info'];
 
-const DONE: CustomerJourney['status'][] = ['fixed', 'with_agent'];
+const DONE: CustomerJourney['status'][] = ['fixed', 'with_agent', 'held'];
 
 /** Holds a finished recovery back until its steps have been shown, so the story never jumps to the end. */
 function pace(v: CustomerView, revealed: Record<string, number>): CustomerView {
@@ -331,7 +331,7 @@ function tagsFor(t: Transaction, journey?: CustomerJourney): Tag[] {
   const tags: Tag[] = [];
   if (t.status === 'reversed') tags.push(['Failed', 'bad'], ['Reversed', 'good']);
   else if (t.status === 'failed') tags.push(['Failed', 'bad']);
-  else if (t.status === 'pending') tags.push(['Pending', 'warn']);
+  else if (t.status === 'pending') tags.push([journey?.status === 'held' ? 'On hold' : 'Pending', 'warn']);
   else if (t.type === 'nip_transfer') tags.push(['Successful', 'good']);
   if (journey?.status === 'fixing') tags.push(['ACR reviewing', 'info']);
   if (journey?.status === 'with_agent') tags.push(['With agent', 'info']);
@@ -504,15 +504,31 @@ const STATUS_COPY: Record<CustomerJourney['status'], { title: string; short: str
   fixing: { title: 'ACR is working on it', short: "Your account is debited and the transfer isn't confirmed yet. We're checking now." },
   fixed: { title: 'Sorted', short: 'Fixed before you had to ask.' },
   with_agent: { title: 'A support agent is on it', short: "We'll update you here. You won't be charged twice." },
+  held: { title: "We're holding your transfer", short: 'The other bank has not confirmed yet.' },
 };
 
-function Status({ view, journeyId, go }: { view: CustomerView; journeyId: string; go: (s: Screen) => void }) {
+function Status({ view, journeyId, go, onChanged }: { view: CustomerView; journeyId: string; go: (s: Screen) => void; onChanged: () => void }) {
+  const [returning, setReturning] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
+  const giveBack = async () => {
+    setReturning(true);
+    setReturnError(null);
+    try {
+      await api('app/return', { body: { customerId: view.customer.id, journeyId } });
+      onChanged();
+    } catch (e) {
+      setReturnError(e instanceof Error ? e.message : 'Could not return the money. Try again.');
+    }
+    setReturning(false);
+  };
   const journey = view.journeys.find((j) => j.id === journeyId);
   const tx = journey && view.transactions.find((t) => t.id === journey.transactionId);
   const note = journey?.notification;
   if (!journey) return <Page title="Sending" back={() => go({ name: 'home' })}><div className="eco-card eco-status busy"><span className="eco-status-icon" aria-hidden="true"><LoaderCircle size={34} className="spin" /></span><h2>Sending your transfer…</h2></div></Page>;
 
   const copy = STATUS_COPY[journey.status];
+  const held = journey.status === 'held';
+  const heldText = `${journey.bank ?? 'The other bank'} is unstable, so your ${formatNgn(journey.amount)} may still reach the recipient. We won't refund it yet, because if it lands you'd pay twice. We'll deliver it when the bank is back, or you can take your money back now.`;
   const good = journey.status === 'successful' || journey.status === 'fixed';
   const busy = journey.status === 'processing' || journey.status === 'fixing' || journey.status === 'failed';
 
@@ -522,7 +538,7 @@ function Status({ view, journeyId, go }: { view: CustomerView; journeyId: string
         <span className="eco-status-icon" aria-hidden="true">{good ? <BadgeCheck size={34} /> : busy ? <LoaderCircle size={34} className="spin" /> : <UserRound size={34} />}</span>
         <h2 aria-live="polite">{note?.title ?? copy.title}</h2>
         {tx && <div className="eco-status-amount">{formatNgn(tx.amount)}</div>}
-        <p>{note?.body ?? copy.short}</p>
+        <p>{held ? heldText : note?.body ?? copy.short}</p>
         {journey.agentSteps.length > 0 && (
           <ol className="eco-agent" aria-live="polite" aria-label="What ACR is doing">
             {journey.agentSteps.map((s, i) => (
@@ -555,10 +571,20 @@ function Status({ view, journeyId, go }: { view: CustomerView; journeyId: string
         </ol>
       </section>
 
-      <div className="eco-row">
-        <button type="button" className="eco-btn ghost" onClick={() => go({ name: 'help' })}>Ask support</button>
-        <button type="button" className="eco-btn" onClick={() => go({ name: 'home' })}>Done</button>
-      </div>
+      {held ? (
+        <>
+          {returnError && <p className="eco-error" role="alert">{returnError}</p>}
+          <div className="eco-row">
+            <button type="button" className="eco-btn ghost" onClick={() => go({ name: 'home' })} disabled={returning}>Keep waiting</button>
+            <button type="button" className="eco-btn" onClick={() => void giveBack()} disabled={returning}>{returning ? 'Returning…' : 'Return my money'}</button>
+          </div>
+        </>
+      ) : (
+        <div className="eco-row">
+          <button type="button" className="eco-btn ghost" onClick={() => go({ name: 'help' })}>Ask support</button>
+          <button type="button" className="eco-btn" onClick={() => go({ name: 'home' })}>Done</button>
+        </div>
+      )}
     </Page>
   );
 }

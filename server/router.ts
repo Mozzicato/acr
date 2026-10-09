@@ -48,7 +48,7 @@ async function tick(store: Store, env: Env): Promise<{ opened: number; planned: 
   const key = llmKey(env);
   const first = await mutate(store, (engine) => {
     const useLlm = !!key && engine.world.settings.planner === 'llm';
-    const { opened, planning } = engine.runAutomatic(useLlm ? 'defer' : 'rules');
+    const { opened, planning } = engine.runAutomatic(useLlm ? 'defer' : 'rules', true);
     const mine = useLlm ? engine.claim(planning) : [];
     return { opened, work: mine.map((id) => ({ id, briefing: engine.world.briefings[id] })) };
   });
@@ -163,6 +163,14 @@ export async function handle(req: Request, env: Env, override?: Store): Promise<
         const journey = await mutate(store, (engine) => engine.startBillPayment(b.customerId, b));
         return json({ journeyId: journey.id });
       }
+      case 'POST app/return': {
+        const b = await body<{ customerId: string; journeyId: string }>(req);
+        await mutate(store, (engine) => {
+          engine.returnMoney(b.customerId, b.journeyId);
+          engine.runAutomatic('rules');
+        });
+        return json({ ok: true });
+      }
       case 'POST app/chat': {
         const b = await body<{ customerId: string; messages: ChatMessage[] }>(req);
         const messages = (Array.isArray(b.messages) ? b.messages : [])
@@ -181,7 +189,7 @@ export async function handle(req: Request, env: Env, override?: Store): Promise<
         let reply = fallbackSupportReply(context);
         // During an unsettled recovery, account truth outranks a conversational model.
         // The deterministic reply names the pending debit and cannot claim the transfer succeeded.
-        if (key && allowed && context.issue?.status !== 'being looked into') {
+        if (key && allowed && !context.issue?.status.startsWith('on hold') && context.issue?.status !== 'being looked into') {
           try {
             reply = await supportReply(key, context, messages);
           } catch {

@@ -117,6 +117,8 @@ button { cursor: pointer; }
 .eco-acr-fixing .eco-acr-icon, .eco-acr-failed .eco-acr-icon { background: var(--eco-warn); color: #fff; }
 .eco-acr-with_agent { background: var(--eco-blue-soft); border-color: #93c5fd; }
 .eco-acr-with_agent .eco-acr-icon { background: var(--eco-blue); color: #fff; }
+.eco-acr-held { background: var(--eco-warn-soft); border-color: #fcd34d; }
+.eco-acr-held .eco-acr-icon { background: var(--eco-warn); color: #fff; }
 
 /* ── Transactions ── */
 .eco-section { margin: 20px 16px 0; }

@@ -9,7 +9,7 @@ const PHASE_LABEL: Record<Phase, string> = {
   act: 'Act', verify: 'Verify', notify: 'Notify customer', learn: 'Learn',
 };
 
-const HEADLINES = new Set(['ACTION APPROVED', 'ACTION APPROVED by operator', 'RECOVERY COMPLETE', 'ESCALATED TO HUMAN']);
+const HEADLINES = new Set(['ACTION APPROVED', 'ACTION APPROVED by operator', 'RECOVERY COMPLETE', 'ESCALATED TO HUMAN', 'TRANSFER HELD']);
 
 export function AgentTrace({ steps, thinking, idleText }: { steps: TraceStep[]; thinking: string | null; idleText: string }) {
   const listRef = useRef<HTMLOListElement>(null);

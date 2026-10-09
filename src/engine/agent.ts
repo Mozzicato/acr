@@ -337,7 +337,8 @@ export class AcrEngine {
       this.step(incident, 'decide', 'info', `Level 0 (Observe): recommending "${selected.label}"`, 'No action taken. An operator must act manually.');
       this.finish(incident, selected.action, null, 'observed', 'medium', false);
     } else if (selected.action === 'human_review') {
-      this.escalate(incident, 'No autonomous recovery is authorized. Handed to a human agent with the full investigation.');
+      if (facts.kind === 'transfer_not_credited' && !facts.nipFinal) this.hold(incident);
+      else this.escalate(incident, 'No autonomous recovery is authorized. Handed to a human agent with the full investigation.');
     } else if (selectedVerdict.autonomous) {
       incident.status = 'executing';
       this.step(incident, 'decide', 'ok', 'ACTION APPROVED', `${selectedVerdict.policy}: ${selected.label}. ${selectedVerdict.reason}`);
@@ -394,7 +395,8 @@ export class AcrEngine {
   }
 
   /** Runs every step that needs no LLM: sweep, investigate, and execute what policy cleared. */
-  runAutomatic(plan: 'rules' | 'defer'): { opened: number; planning: string[] } {
+  runAutomatic(plan: 'rules' | 'defer', monitorHeld = false): { opened: number; planning: string[] } {
+    if (monitorHeld) this.monitorHeld();
     const opened = this.sweep().length;
     for (const i of this.world.incidents.filter((x) => x.status === 'investigating')) this.investigate(i.id);
     const planning = this.world.incidents.filter((x) => x.status === 'planning').map((x) => x.id);
@@ -404,6 +406,91 @@ export class AcrEngine {
       return { opened, planning: [] };
     }
     return { opened, planning };
+  }
+
+  /** A transfer ACR is holding because the other bank is unstable and may still deliver it. */
+  isHeld(journey: Journey): boolean {
+    const incident = this.world.incidents.filter((i) => i.journeyId === journey.id).at(-1);
+    const tx = this.world.bank.transactions[journey.transactionId];
+    return incident?.status === 'escalated' && tx?.status === 'pending'
+      && journey.currentState === 'debited_awaiting_credit' && journey.events.some((e) => e.type === 'transfer_held');
+  }
+
+  /** The customer chooses to take the money back instead of waiting. ACR recalls the transfer, then reverses it. */
+  returnMoney(customerId: string, journeyId: string): void {
+    const journey = this.journey(journeyId);
+    if (journey.customerId !== customerId || !this.isHeld(journey)) throw new Error('This transfer is not ready to be returned.');
+    this.reopen(journey, { type: 'transfer_recalled', summary: 'Customer cancelled the transfer and asked for the money back' },
+      'Customer asked for the money back', 'Recall sent to the other bank. NIP now reports a final failure, so a reversal cannot pay twice.');
+  }
+
+  /** Held transfers: deliver when the other bank is back, or reverse them if it goes down for good. */
+  monitorHeld(): void {
+    for (const journey of this.world.journeys) {
+      if (!this.isHeld(journey)) continue;
+      const tx = this.world.bank.transactions[journey.transactionId];
+      const bank = tx.beneficiary!.bank;
+      const health = this.world.bank.bankStatus[bank];
+      if (health === 'up') this.deliverHeld(journey, tx, bank);
+      else if (health === 'down') {
+        this.reopen(journey, { type: 'transfer_failed', summary: `${bank} went down: NIP reports a final failure` },
+          `${bank} went down`, 'NIP now reports a final failure, so the money never left and can safely go back.');
+      }
+    }
+  }
+
+  private hold(incident: Incident): void {
+    const journey = this.journey(incident.journeyId);
+    const bank = this.world.bank.transactions[journey.transactionId].beneficiary?.bank ?? 'The other bank';
+    incident.status = 'escalated';
+    incident.resolution = `${bank} has not given a final answer, so a refund could pay twice. ACR is holding the transfer: it delivers it if the bank comes back, reverses it if the bank fails, or returns the money if the customer asks.`;
+    journey.health = 'escalated';
+    this.addEvent(journey, 'transfer_held', `Held while ${bank} confirms`, { incidentId: incident.id });
+    this.step(incident, 'decide', 'warn', 'TRANSFER HELD', `${incident.resolution} The customer can return the money now.`);
+    this.finish(incident, 'human_review', null, 'escalated', 'medium', false);
+  }
+
+  /** Puts a held incident back through investigate, decide and act, now that the NIP status is final. */
+  private reopen(journey: Journey, event: { type: string; summary: string }, why: string, detail: string): void {
+    const incident = this.world.incidents.filter((i) => i.journeyId === journey.id).at(-1)!;
+    this.systems.settleTransfer(journey.transactionId, 'failed');
+    this.addEvent(journey, event.type, event.summary, { transactionId: journey.transactionId });
+    this.world.recoveries = this.world.recoveries.filter((r) => r.incidentId !== incident.id);
+    delete this.world.claims[incident.id];
+    Object.assign(incident, { status: 'investigating', resolution: null, resolvedAt: null, cause: null, confidence: null, assessment: null });
+    journey.health = 'at_risk';
+    this.step(incident, 'decide', 'info', why, detail);
+  }
+
+  private deliverHeld(journey: Journey, tx: Transaction, bank: string): void {
+    const incident = this.world.incidents.filter((i) => i.journeyId === journey.id).at(-1)!;
+    this.systems.settleTransfer(tx.id, 'successful');
+    this.addEvent(journey, 'transfer_settled', `${bank} is back and confirmed the credit`, { transactionId: tx.id });
+    journey.currentState = 'completed';
+    journey.health = 'recovered';
+    journey.healthScore = 94;
+    incident.status = 'resolved';
+    incident.resolution = `${bank} came back and delivered the transfer. No refund was needed, so nothing was paid twice.`;
+    this.step(incident, 'act', 'ok', `${bank} is back: transfer delivered`, 'NIP now reports the transfer as successful.');
+    const customer = this.systems.getCustomer(journey.customerId);
+    const notification: Notification = {
+      id: `NTF-${String(this.world.bank.outbox.length + 1).padStart(4, '0')}`,
+      incidentId: incident.id,
+      customerId: customer.id,
+      channel: customer.preferences.channel,
+      to: `${customer.name.split(' ')[0]}'s phone (in-app)`,
+      title: `Your ${formatNgn(tx.amount)} transfer went through`,
+      body: `Hi ${customer.name.split(' ')[0]}, ${bank} is back and your transfer of ${formatNgn(tx.amount)} to ${tx.beneficiary!.name} has been delivered. Nothing more to do.`,
+      at: this.now(),
+    };
+    this.systems.send(notification);
+    this.world.audit.push({
+      id: `AUD-${String(++this.world.auditSeq).padStart(4, '0')}`, incidentId: incident.id, tool: 'send_notification', actor: 'acr-agent',
+      input: { customerId: customer.id, title: notification.title }, output: notification, at: this.now(), ok: true,
+    });
+    this.step(incident, 'notify', 'ok', `Customer notified via ${notification.channel.toUpperCase()}`, notification.to);
+    this.world.recoveries = this.world.recoveries.filter((r) => r.incidentId !== incident.id);
+    this.finish(incident, 'human_review', 'human_review', 'successful', 'none', true);
   }
 
   executeReady(): void {

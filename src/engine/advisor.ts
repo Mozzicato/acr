@@ -141,6 +141,7 @@ export function fallbackSupportReply(context: SupportContext): string {
   const issue = context.issue;
   if (!issue) return `Your account looks fine. Your balance is ${context.balance}. If something seems wrong, tell me which transaction and I'll get a human agent to check it.`;
   if (issue.whatAcrDid) return `${issue.whatAcrDid} Your balance is ${context.balance}. Is there anything else I can help with?`;
+  if (issue.status.startsWith('on hold')) return `${issue.what} is on hold: the other bank is unstable, so the money may still land. We won't refund it yet, because that could pay twice. We'll deliver it when the bank is back, or you can tap "Return my money" on the transfer screen. ${context.balanceState}`;
   if (issue.status === 'being looked into') return `ACR is still investigating ${issue.what}. The debit remains pending and has not been returned or settled yet. ${context.balanceState}`;
   return `We spotted a problem with ${issue.what} and a human agent is already on it. You'll get an update right here in the app.`;
 }
