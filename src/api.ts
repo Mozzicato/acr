@@ -19,19 +19,9 @@ export class ApiError extends Error {
   }
 }
 
-const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
-
-/** Serverless without Redis has one private bank per instance, so the bank runs and is saved in this browser instead. */
-let mode: Promise<'server' | 'local'> | null = null;
-export const apiMode = (): Promise<'server' | 'local'> => (mode ??= (async () => {
-  try {
-    const res = await fetch('/api/router?path=status', { signal: AbortSignal.timeout(8_000) });
-    const status = (await res.json()) as { shared?: boolean };
-    return status.shared === false ? 'local' : 'server';
-  } catch {
-    return onLocalhost ? 'server' : 'local';
-  }
-})());
+/** Deployed builds run the bank in this browser (serverless instances can't share one); `npm run dev` uses the dev server. */
+const mode: Promise<'server' | 'local'> = Promise.resolve(import.meta.env.PROD ? 'local' : 'server');
+export const apiMode = (): Promise<'server' | 'local'> => mode;
 
 async function send(params: URLSearchParams, init: { method: string; headers: Record<string, string>; body?: string }, timeoutMs: number): Promise<Response> {
   if ((await apiMode()) === 'server') return fetch(`/api/router?${params}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
