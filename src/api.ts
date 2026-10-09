@@ -21,16 +21,15 @@ export class ApiError extends Error {
 
 const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
 
-/** Without shared server storage (no Redis), the bank runs and is saved in this browser instead. */
+/** Serverless without Redis has one private bank per instance, so the bank runs and is saved in this browser instead. */
 let mode: Promise<'server' | 'local'> | null = null;
 export const apiMode = (): Promise<'server' | 'local'> => (mode ??= (async () => {
-  if (onLocalhost) return 'server';
   try {
-    const res = await fetch('/api/router?path=status', { signal: AbortSignal.timeout(5_000) });
-    const status = (await res.json()) as { storage?: string };
-    return status.storage === 'redis' ? 'server' : 'local';
+    const res = await fetch('/api/router?path=status', { signal: AbortSignal.timeout(8_000) });
+    const status = (await res.json()) as { shared?: boolean };
+    return status.shared === false ? 'local' : 'server';
   } catch {
-    return 'local';
+    return onLocalhost ? 'server' : 'local';
   }
 })());
 

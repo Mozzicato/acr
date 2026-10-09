@@ -81,7 +81,7 @@ export async function handle(req: Request, env: Env, override?: Store): Promise<
   try {
     switch (route) {
       case 'GET status':
-        return json({ llm: !!llmKey(env), model: ADVISOR_MODEL, storage: store.kind, adminRequired: !!env.ADMIN_KEY });
+        return json({ llm: !!llmKey(env), model: ADVISOR_MODEL, storage: store.kind, adminRequired: !!env.ADMIN_KEY, shared: store.kind === 'redis' || !env.VERCEL });
 
       // ── Operations console ──
       case 'GET world': {
