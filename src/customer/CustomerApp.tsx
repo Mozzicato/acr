@@ -49,6 +49,8 @@ export function CustomerApp() {
   const [view, setView] = useState<CustomerView | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: 'home' });
   const [error, setError] = useState<string | null>(null);
+  const [splash, setSplash] = useState<CustomerJourney | null>(null);
+  const seenStatus = useRef<Map<string, CustomerJourney['status']> | null>(null);
   const embedded = new URLSearchParams(location.search).has('as');
   const latestRefresh = useRef(0);
 
@@ -85,6 +87,15 @@ export function CustomerApp() {
     return () => clearInterval(timer);
   }, [customerId, refresh]);
 
+  // Announce a recovery the moment it completes, but not ones that were already done when the app opened.
+  useEffect(() => {
+    if (!view) return;
+    const prev = seenStatus.current;
+    seenStatus.current = new Map(view.journeys.map((j) => [j.id, j.status]));
+    const done = prev && view.journeys.find((j) => j.status === 'fixed' && j.outcome && prev.get(j.id) !== 'fixed');
+    if (done) setSplash(done);
+  }, [view]);
+
   if (!customerId) return <Join onJoined={(id) => { setCustomerId(id); setScreen({ name: 'home' }); }} />;
   if (!view) return <div className="eco-loading"><LoaderCircle className="spin" aria-hidden="true" /> Loading your account…</div>;
 
@@ -97,6 +108,18 @@ export function CustomerApp() {
     <div className={`eco ${embedded ? 'is-embedded' : ''}`}>
       <div className="eco-proto" role="note">Prototype for the {BANK_NAME} hackathon · simulated money · never enter real details</div>
       {error && <div className="eco-offline" role="status">{error}</div>}
+      {splash && (
+        <div className="eco-splash" role="alertdialog" aria-labelledby="splash-title">
+          <div className="eco-splash-card">
+            <span className="eco-splash-icon" aria-hidden="true"><BadgeCheck size={40} /></span>
+            <h2 id="splash-title">{splash.outcome === 'reversed' ? 'Your transfer has been reversed' : 'Your token has been delivered'}</h2>
+            <div className="eco-splash-amount">{formatNgn(splash.amount)}</div>
+            <p>{splash.notification?.body ?? 'ACR fixed this for you. You did not need to contact anyone.'}</p>
+            <button type="button" className="eco-btn" autoFocus onClick={() => { go({ name: 'status', journeyId: splash.id }); setSplash(null); }}>See what happened</button>
+            <button type="button" className="eco-btn ghost" onClick={() => setSplash(null)}>Close</button>
+          </div>
+        </div>
+      )}
       <main className="eco-main">
         {screen.name === 'home' && <Home view={view} go={go} />}
         {screen.name === 'transfer' && <Transfer view={view} back={() => go({ name: 'home' })} done={(journeyId) => { void refresh(); go({ name: 'status', journeyId }); }} />}
@@ -219,7 +242,7 @@ function Home({ view, go }: { view: CustomerView; go: (s: Screen) => void }) {
       <section className="eco-section" aria-labelledby="recent">
         <h2 id="recent">Recent transactions</h2>
         <ul className="eco-tx">
-          {view.transactions.slice(0, 8).map((t) => <TxRow key={t.id} t={t} />)}
+          {view.transactions.slice(0, 15).map((t) => <TxRow key={t.id} t={t} journey={view.journeys.find((j) => j.transactionId === t.id)} />)}
         </ul>
       </section>
     </>
@@ -236,15 +259,25 @@ function Action({ icon, label, onClick, disabled }: { icon: ReactNode; label: st
   );
 }
 
-const CHIP: Partial<Record<Transaction['status'], [string, string]>> = {
-  pending: ['Pending', 'warn'],
-  failed: ['Failed', 'bad'],
-  reversed: ['Reversed', 'good'],
-};
+type Tag = [label: string, tone: 'warn' | 'bad' | 'good' | 'info'];
 
-function TxRow({ t }: { t: Transaction }) {
+/** Every transaction gets a tag saying what became of it, including ACR's own reversals. */
+function tagsFor(t: Transaction, journey?: CustomerJourney): Tag[] {
+  if (t.type === 'reversal') return [['Reversal', 'good'], ['Refunded by ACR', 'info']];
+  const tags: Tag[] = [];
+  if (t.status === 'reversed') tags.push(['Failed', 'bad'], ['Reversed', 'good']);
+  else if (t.status === 'failed') tags.push(['Failed', 'bad']);
+  else if (t.status === 'pending') tags.push(['Pending', 'warn']);
+  else if (t.type === 'nip_transfer') tags.push(['Successful', 'good']);
+  if (journey?.status === 'fixing') tags.push(['ACR reviewing', 'info']);
+  if (journey?.status === 'with_agent') tags.push(['With agent', 'info']);
+  if (t.bill?.delivered) tags.push(['Token ready', 'good']);
+  return tags;
+}
+
+function TxRow({ t, journey }: { t: Transaction; journey?: CustomerJourney }) {
   const credit = t.direction === 'credit';
-  const chip = CHIP[t.status];
+  const struck = t.status === 'reversed';
   return (
     <li>
       <span className={`eco-tx-icon ${credit ? 'in' : 'out'}`} aria-hidden="true">{credit ? <ArrowDownLeft size={16} /> : <ArrowUpRight size={16} />}</span>
@@ -252,11 +285,10 @@ function TxRow({ t }: { t: Transaction }) {
         <span className="eco-tx-name">{t.narration}</span>
         <span className="eco-tx-meta">
           {when(t.at)}
-          {chip && <span className={`eco-chip ${chip[1]}`}>{chip[0]}</span>}
-          {t.bill?.delivered && <span className="eco-chip good">Token ready</span>}
+          {tagsFor(t, journey).map(([label, tone]) => <span key={label} className={`eco-chip ${tone}`}>{label}</span>)}
         </span>
       </span>
-      <span className={`eco-tx-amt ${credit ? 'in' : ''}`}>{credit ? '+' : '−'}{formatNgn(t.amount)}</span>
+      <span className={`eco-tx-amt ${credit ? 'in' : ''} ${struck ? 'struck' : ''}`}>{credit ? '+' : '−'}{formatNgn(t.amount)}</span>
     </li>
   );
 }

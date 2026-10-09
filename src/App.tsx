@@ -168,6 +168,12 @@ export default function App() {
         {error && <span className="status-line" role="alert" style={{ color: 'var(--danger)', marginLeft: 'auto' }}>{error}</span>}
       </div>
 
+      {world.storage === 'memory' && !['localhost', '127.0.0.1'].includes(location.hostname) && (
+        <div className="status-line" role="alert" style={{ color: 'var(--danger)' }}>
+          Bank state is not shared: Redis is not connected, so each server instance keeps its own bank and settings flip back. Connect Upstash Redis and redeploy.
+        </div>
+      )}
+
       {tab === 'stress' ? <StressPanel /> : (
         <>
           <LiveControl

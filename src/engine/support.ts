@@ -15,6 +15,9 @@ export interface CustomerJourney {
   title: string;
   transactionId: string;
   status: CustomerStatus;
+  amount: number;
+  /** What ACR did for the customer once fixed. */
+  outcome: 'reversed' | 'token' | null;
   /** Customer-facing timeline. */
   steps: Array<{ at: string; label: string; tone: 'ok' | 'warn' | 'fail' | 'agent' }>;
   token: string | null;
@@ -83,6 +86,8 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
         title: j.title,
         transactionId: j.transactionId,
         status: statusOf(j, incident),
+        amount: tx?.amount ?? 0,
+        outcome: incident?.status !== 'resolved' ? null : tx?.status === 'reversed' ? 'reversed' : tx?.bill?.delivered ? 'token' : null,
         steps: j.events.flatMap((e) => (CUSTOMER_STEPS[e.type] ? [{ at: e.at, ...CUSTOMER_STEPS[e.type] }] : [])),
         token: tx?.bill?.delivered ? tx.bill.token : null,
         notification: (incident && w.bank.outbox.filter((n) => n.incidentId === incident.id).map(({ title, body }) => ({ title, body })).at(-1)) ?? null,

@@ -136,6 +136,16 @@ button { cursor: pointer; }
 .eco-chip.warn { background: var(--eco-warn-soft); color: var(--eco-warn); }
 .eco-chip.bad { background: var(--eco-bad-soft); color: var(--eco-bad); }
 .eco-chip.good { background: var(--eco-good-soft); color: var(--eco-good); }
+.eco-chip.info { background: var(--eco-blue-soft); color: var(--eco-blue-deep); }
+.eco-tx-amt.struck { text-decoration: line-through; color: var(--eco-muted); }
+
+/* ── Recovery splash ── */
+.eco-splash { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(8, 58, 117, 0.72); animation: eco-in 250ms ease both; }
+.eco-splash-card { width: 100%; max-width: 380px; padding: 24px 20px; border-radius: 20px; background: #fff; text-align: center; display: flex; flex-direction: column; gap: 10px; }
+.eco-splash-card h2 { margin: 0; font-size: 21px; }
+.eco-splash-card p { margin: 0 0 6px; color: var(--eco-muted); font-size: 14px; }
+.eco-splash-icon { align-self: center; display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; background: var(--eco-good-soft); color: var(--eco-good); }
+.eco-splash-amount { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* ── Pages ── */
 .eco-pagebar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 10px 8px; background: var(--eco-blue); color: #fff; }
