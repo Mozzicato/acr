@@ -14,7 +14,7 @@ export type Env = Record<string, string | undefined>;
 export class Busy extends Error {}
 
 export interface Store {
-  kind: 'redis' | 'memory';
+  kind: 'redis' | 'memory' | 'local';
   load(): Promise<World | null>;
   save(world: World): Promise<void>;
   lock(): Promise<() => Promise<void>>;

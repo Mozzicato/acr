@@ -27,7 +27,7 @@ const STEP_MS = reducedMotion ? 40 : 110;
 
 interface WorldResponse {
   state: EngineState;
-  storage: 'redis' | 'memory';
+  storage: 'redis' | 'memory' | 'local';
   llm: boolean;
 }
 
@@ -143,8 +143,8 @@ export default function App() {
         <div className="clock" aria-label="Current time">
           <Clock size={14} aria-hidden="true" />
           <strong className="mono">{formatTimeSeconds(state.now)}</strong> WAT
-          <span className="sim-tag" title={world.storage === 'redis' ? 'State is shared through Redis' : 'State lives in this server process'}>
-            <Database size={11} aria-hidden="true" style={{ verticalAlign: '-1px' }} /> {world.storage === 'redis' ? 'Redis' : 'Memory'}
+          <span className="sim-tag" title={world.storage === 'redis' ? 'State is shared through Redis' : world.storage === 'local' ? 'The bank runs and is saved in this browser' : 'State lives in this server process'}>
+            <Database size={11} aria-hidden="true" style={{ verticalAlign: '-1px' }} /> {world.storage === 'redis' ? 'Redis' : world.storage === 'local' ? 'This device' : 'Memory'}
           </span>
         </div>
         <div className="controls">

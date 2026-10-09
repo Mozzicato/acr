@@ -77,7 +77,7 @@ export const PLAYBOOKS: Record<FailureKind, Playbook> = {
 };
 
 export const PRODUCTION_WINDOWS = { transferSeconds: 600, billSeconds: 300 };
-export const LIVE_WINDOWS = { transferSeconds: 6, billSeconds: 6 };
+export const LIVE_WINDOWS = { transferSeconds: 3, billSeconds: 3 };
 
 const OPEN: Incident['status'][] = ['investigating', 'planning', 'awaiting_approval', 'executing'];
 /** Keep the persisted world small during a long live session. */

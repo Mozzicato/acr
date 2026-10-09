@@ -19,15 +19,35 @@ export class ApiError extends Error {
   }
 }
 
+const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
+
+/** Without shared server storage (no Redis), the bank runs and is saved in this browser instead. */
+let mode: Promise<'server' | 'local'> | null = null;
+export const apiMode = (): Promise<'server' | 'local'> => (mode ??= (async () => {
+  if (onLocalhost) return 'server';
+  try {
+    const res = await fetch('/api/router?path=status', { signal: AbortSignal.timeout(5_000) });
+    const status = (await res.json()) as { storage?: string };
+    return status.storage === 'redis' ? 'server' : 'local';
+  } catch {
+    return 'local';
+  }
+})());
+
+async function send(params: URLSearchParams, init: { method: string; headers: Record<string, string>; body?: string }, timeoutMs: number): Promise<Response> {
+  if ((await apiMode()) === 'server') return fetch(`/api/router?${params}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  const [{ handle }, { localStore }] = await Promise.all([import('../server/router'), import('./localStore')]);
+  return handle(new Request(`${location.origin}/api/router?${params}`, init), {}, localStore);
+}
+
 export async function api<T>(path: string, options: { body?: unknown; query?: Record<string, string>; timeoutMs?: number } = {}): Promise<T> {
   const params = new URLSearchParams({ path, ...options.query });
   const key = adminKey();
-  const res = await fetch(`/api/router?${params}`, {
+  const res = await send(params, {
     method: options.body === undefined ? 'GET' : 'POST',
     headers: { 'Content-Type': 'application/json', ...(key ? { 'x-admin-key': key } : {}) },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-  });
+  }, options.timeoutMs ?? 30_000);
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new ApiError(res.status, data.error ?? `Request failed (${res.status})`);
   return data;

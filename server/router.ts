@@ -72,11 +72,11 @@ async function tick(store: Store, env: Env): Promise<{ opened: number; planned: 
   return { opened: first.opened, planned: results.length };
 }
 
-export async function handle(req: Request, env: Env): Promise<Response> {
+export async function handle(req: Request, env: Env, override?: Store): Promise<Response> {
   const url = new URL(req.url);
   const path = url.searchParams.get('path') ?? url.pathname.replace(/^\/api\/?/, '');
   const route = `${req.method} ${path}`;
-  const store = storeFor(env);
+  const store = override ?? storeFor(env);
 
   try {
     switch (route) {

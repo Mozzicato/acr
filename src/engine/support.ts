@@ -18,6 +18,8 @@ export interface CustomerJourney {
   amount: number;
   /** What ACR did for the customer once fixed. */
   outcome: 'reversed' | 'token' | null;
+  /** What the agent is doing, in plain words, for the live progress list. */
+  agentSteps: Array<{ title: string; detail?: string; tone: 'ok' | 'warn' | 'fail' | 'info' }>;
   /** Customer-facing timeline. */
   steps: Array<{ at: string; label: string; tone: 'ok' | 'warn' | 'fail' | 'agent' }>;
   token: string | null;
@@ -34,6 +36,7 @@ export interface CustomerView {
   notifications: Notification[];
   journeys: CustomerJourney[];
   banks: string[];
+  bankStatus: Record<string, string>;
 }
 
 const CUSTOMER_STEPS: Record<string, { label: string; tone: CustomerJourney['steps'][number]['tone'] }> = {
@@ -59,6 +62,24 @@ function statusOf(journey: Journey, incident: Incident | undefined): CustomerSta
   if (journey.currentState === 'completed') return 'successful';
   if (journey.events.some((e) => e.type === 'transfer_failed')) return 'failed';
   return 'processing';
+}
+
+const DECIDE_COPY: Record<string, string> = {
+  'ACTION APPROVED': 'Confirmed safe to return your money',
+  'ESCALATED TO HUMAN': 'Handed to a support agent with everything we found',
+};
+
+function agentSteps(w: AcrEngine['world'], journey: Journey): CustomerJourney['agentSteps'] {
+  const own = w.trace.filter((s) => s.journeyId === journey.id);
+  if (!own.length) return [];
+  const steps: CustomerJourney['agentSteps'] = [{ title: 'ACR noticed this transfer was not confirmed', tone: 'warn' }];
+  for (const s of own) {
+    if (s.phase === 'decide' && DECIDE_COPY[s.title]) steps.push({ title: DECIDE_COPY[s.title], tone: s.status === 'ok' ? 'ok' : 'info' });
+    else if (['investigate', 'act', 'verify'].includes(s.phase) && !s.title.startsWith('Customer:') && !s.title.startsWith('Investigating')) {
+      steps.push({ title: s.title, detail: s.detail, tone: s.status === 'ok' ? 'ok' : s.status === 'fail' ? 'fail' : s.status === 'warn' ? 'warn' : 'info' });
+    }
+  }
+  return steps.slice(0, 12);
 }
 
 function isUnsettled(journey: Journey): boolean {
@@ -88,6 +109,7 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
         status: statusOf(j, incident),
         amount: tx?.amount ?? 0,
         outcome: incident?.status !== 'resolved' ? null : tx?.status === 'reversed' ? 'reversed' : tx?.bill?.delivered ? 'token' : null,
+        agentSteps: agentSteps(w, j),
         steps: j.events.flatMap((e) => (CUSTOMER_STEPS[e.type] ? [{ at: e.at, ...CUSTOMER_STEPS[e.type] }] : [])),
         token: tx?.bill?.delivered ? tx.bill.token : null,
         notification: (incident && w.bank.outbox.filter((n) => n.incidentId === incident.id).map(({ title, body }) => ({ title, body })).at(-1)) ?? null,
@@ -103,6 +125,7 @@ export function customerView(engine: AcrEngine, customerId: string): CustomerVie
     notifications: w.bank.outbox.filter((n) => n.customerId === customerId),
     journeys,
     banks: Object.keys(w.bank.bankStatus),
+    bankStatus: { ...w.bank.bankStatus },
   };
 }
 

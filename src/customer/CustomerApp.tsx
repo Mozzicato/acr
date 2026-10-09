@@ -1,12 +1,12 @@
 // The customer's side: a prototype mobile banking app with ACR built in. Judges open it on their
 // own phones, send real (simulated) money, and watch ACR fix failures before they ask.
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowDownLeft, ArrowLeft, ArrowUpRight, BadgeCheck, Bell, Check, CircleAlert, Eye, EyeOff, Headset, House,
   LoaderCircle, MessageCircle, Send, ShieldCheck, Smartphone, UserRound, Zap,
 } from 'lucide-react';
-import { api, ApiError } from '../api';
+import { api, apiMode, ApiError } from '../api';
 import type { ChatMessage } from '../engine/advisor';
 import { BANK_NAME } from '../engine/seed';
 import type { CustomerJourney, CustomerView } from '../engine/support';
@@ -46,7 +46,12 @@ function storedId(): string | null {
 
 export function CustomerApp() {
   const [customerId, setCustomerId] = useState<string | null>(storedId);
-  const [view, setView] = useState<CustomerView | null>(null);
+  const [raw, setRaw] = useState<CustomerView | null>(null);
+  const [revealed, setRevealed] = useState<Record<string, number>>({});
+  const rawRef = useRef<CustomerView | null>(null);
+  rawRef.current = raw;
+  // The server finishes a recovery in milliseconds; the customer watches it unfold step by step.
+  const view = useMemo(() => (raw ? pace(raw, revealed) : null), [raw, revealed]);
   const [screen, setScreen] = useState<Screen>({ name: 'home' });
   const [error, setError] = useState<string | null>(null);
   const [splash, setSplash] = useState<CustomerJourney | null>(null);
@@ -61,7 +66,7 @@ export function CustomerApp() {
       const nextView = await api<CustomerView>('app/me', { query: { id: customerId } });
       // A slower earlier poll must not overwrite a newer balance or recovery status.
       if (request === latestRefresh.current) {
-        setView(nextView);
+        setRaw(nextView);
         setError(null);
       }
     } catch (e) {
@@ -69,7 +74,7 @@ export function CustomerApp() {
       if (e instanceof ApiError && e.status === 404) {
         try { localStorage.removeItem(ID_KEY); } catch { /* storage unavailable */ }
         setCustomerId(null);
-        setView(null);
+        setRaw(null);
       } else {
         setError('Connection problem. Retrying…');
       }
@@ -91,6 +96,33 @@ export function CustomerApp() {
     const reads = setInterval(() => { if (!document.hidden) void refresh(); }, 1_000);
     return () => { clearInterval(timer); clearInterval(reads); };
   }, [customerId, refresh]);
+
+  // Journeys already on screen at first load show in full; new ones reveal from the start.
+  const initialised = useRef(false);
+  useEffect(() => {
+    if (!raw) return;
+    setRevealed((prev) => {
+      const next = { ...prev };
+      for (const j of raw.journeys) if (!(j.id in next)) next[j.id] = initialised.current ? 0 : j.agentSteps.length;
+      return next;
+    });
+    initialised.current = true;
+  }, [raw]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const journeys = rawRef.current?.journeys ?? [];
+      setRevealed((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const j of journeys) {
+          if ((next[j.id] ?? 0) < j.agentSteps.length) { next[j.id] = (next[j.id] ?? 0) + 1; changed = true; }
+        }
+        return changed ? next : prev;
+      });
+    }, 700);
+    return () => clearInterval(timer);
+  }, []);
 
   // Announce a recovery the moment it completes, but not ones that were already done when the app opened.
   useEffect(() => {
@@ -266,6 +298,33 @@ function Action({ icon, label, onClick, disabled }: { icon: ReactNode; label: st
 
 type Tag = [label: string, tone: 'warn' | 'bad' | 'good' | 'info'];
 
+const DONE: CustomerJourney['status'][] = ['fixed', 'with_agent'];
+
+/** Holds a finished recovery back until its steps have been shown, so the story never jumps to the end. */
+function pace(v: CustomerView, revealed: Record<string, number>): CustomerView {
+  const heldTx = new Map<string, CustomerJourney>();
+  const journeys = v.journeys.map((j): CustomerJourney => {
+    const shown = revealed[j.id] ?? 0;
+    const agentSteps = j.agentSteps.slice(0, shown);
+    if (shown >= j.agentSteps.length || !DONE.includes(j.status)) return { ...j, agentSteps };
+    const held = { ...j, agentSteps, status: 'fixing' as const, outcome: null, notification: null, steps: j.steps.filter((s) => s.tone !== 'agent') };
+    heldTx.set(j.transactionId, held);
+    return held;
+  });
+  if (!heldTx.size) return { ...v, journeys };
+  const returned = v.transactions.filter((t) => t.reverses && heldTx.has(t.reverses));
+  const first = [...heldTx.values()][0];
+  return {
+    ...v,
+    journeys,
+    balance: v.balance - returned.reduce((sum, t) => sum + t.amount, 0),
+    pendingRecovery: returned.length ? { amount: returned[0].amount, title: first.title } : v.pendingRecovery,
+    transactions: v.transactions
+      .filter((t) => !returned.includes(t))
+      .map((t) => (heldTx.has(t.id) && t.status === 'reversed' ? { ...t, status: 'pending' as const } : t)),
+  };
+}
+
 /** Every transaction gets a tag saying what became of it, including ACR's own reversals. */
 function tagsFor(t: Transaction, journey?: CustomerJourney): Tag[] {
   if (t.type === 'reversal') return [['Reversal', 'good'], ['Refunded by ACR', 'info']];
@@ -307,6 +366,8 @@ function Transfer({ view, back, done }: { view: CustomerView; back: () => void; 
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [local, setLocal] = useState(false);
+  useEffect(() => { void apiMode().then((m) => setLocal(m === 'local')); }, []);
   const resolved = /^\d{10}$/.test(account) ? nameFor(account) : null;
   const value = Number(amount.replace(/\D/g, ''));
   const valid = !!resolved && value >= 100 && value <= view.balance;
@@ -357,6 +418,14 @@ function Transfer({ view, back, done }: { view: CustomerView; back: () => void; 
             ))}
           </div>
         </fieldset>
+        {local && (
+          <div className="eco-demo" role="radiogroup" aria-label={`Demo network for ${bank}`}>
+            <span>Demo: {bank} network</span>
+            {(['up', 'down', 'unstable'] as const).map((s) => (
+              <button key={s} type="button" role="radio" aria-checked={view.bankStatus[bank] === s} className={view.bankStatus[bank] === s ? 'on' : ''} onClick={() => void api('world/settings', { body: { bank, bankStatus: s } })}>{s}</button>
+            ))}
+          </div>
+        )}
         <label className="eco-field">
           <span>Account number</span>
           <input inputMode="numeric" autoComplete="off" maxLength={10} value={account} onChange={(e) => setAccount(e.target.value.replace(/\D/g, ''))} placeholder="10 digits" />
@@ -429,10 +498,10 @@ function Bills({ view, back, done }: { view: CustomerView; back: () => void; don
 
 // ── Status ───────────────────────────────────────────────────────────────────
 const STATUS_COPY: Record<CustomerJourney['status'], { title: string; short: string }> = {
-  processing: { title: 'Confirming with the other bank', short: 'Your account is debited. Not confirmed yet, so this is not marked successful.' },
+  processing: { title: 'ACR is working on it', short: "Your account is debited and the transfer isn't confirmed yet. We're checking now." },
   successful: { title: 'Successful', short: 'All done.' },
-  failed: { title: "This didn't go through", short: "Your account was debited. We're already checking." },
-  fixing: { title: "We're fixing this for you", short: 'We spotted a problem. No need to call us.' },
+  failed: { title: 'ACR is working on it', short: "Your account is debited and the transfer isn't confirmed yet. We're checking now." },
+  fixing: { title: 'ACR is working on it', short: "Your account is debited and the transfer isn't confirmed yet. We're checking now." },
   fixed: { title: 'Sorted', short: 'Fixed before you had to ask.' },
   with_agent: { title: 'A support agent is on it', short: "We'll update you here. You won't be charged twice." },
 };
@@ -441,7 +510,7 @@ function Status({ view, journeyId, go }: { view: CustomerView; journeyId: string
   const journey = view.journeys.find((j) => j.id === journeyId);
   const tx = journey && view.transactions.find((t) => t.id === journey.transactionId);
   const note = journey?.notification;
-  if (!journey) return <Page title="Status" back={() => go({ name: 'home' })}><p className="eco-muted">Loading…</p></Page>;
+  if (!journey) return <Page title="Sending" back={() => go({ name: 'home' })}><div className="eco-card eco-status busy"><span className="eco-status-icon" aria-hidden="true"><LoaderCircle size={34} className="spin" /></span><h2>Sending your transfer…</h2></div></Page>;
 
   const copy = STATUS_COPY[journey.status];
   const good = journey.status === 'successful' || journey.status === 'fixed';
@@ -454,6 +523,17 @@ function Status({ view, journeyId, go }: { view: CustomerView; journeyId: string
         <h2 aria-live="polite">{note?.title ?? copy.title}</h2>
         {tx && <div className="eco-status-amount">{formatNgn(tx.amount)}</div>}
         <p>{note?.body ?? copy.short}</p>
+        {journey.agentSteps.length > 0 && (
+          <ol className="eco-agent" aria-live="polite" aria-label="What ACR is doing">
+            {journey.agentSteps.map((s, i) => (
+              <li key={i} className={s.tone}>
+                <Check size={14} aria-hidden="true" />
+                <span><strong>{s.title}</strong>{s.detail && <small>{s.detail}</small>}</span>
+              </li>
+            ))}
+            {busy && <li className="now"><LoaderCircle size={14} className="spin" aria-hidden="true" /><span><strong>Working…</strong></span></li>}
+          </ol>
+        )}
         {journey.token && (
           <div className="eco-token">
             <span>Your token</span>
